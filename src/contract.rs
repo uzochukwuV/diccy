@@ -217,7 +217,7 @@ impl DiceContract {
         // Winner gets +100 xp, loser +20 xp; level up every 200 xp -> +1 max damage.
         for i in 0..2 {
             let owner = players[i].clone();
-            let mut profile = self
+            let profile = self
                 .state
                 .profiles
                 .get_mut_or_default(&owner.clone())
@@ -244,7 +244,7 @@ impl DiceContract {
                 profile.hp_max = profile.hp_max.saturating_add((leveled * 5) as u32);
             }
             // store back
-            self.state.profiles.insert(owner.clone(), profile).unwrap();
+            self.state.profiles.insert(&owner.clone(), profile.clone()).unwrap();
         }
     }
 }
@@ -282,5 +282,5 @@ fn compute_hits_from_seeds(
     hits
 }
 
-#[derive(ComplexObject)]
-impl DiceState {}
+// #[derive(ComplexObject)]
+// impl DiceState {}

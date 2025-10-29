@@ -5,12 +5,15 @@ mod state;
 use std::sync::Arc;
 
 use async_graphql::{Context, EmptySubscription, Request, Response, Schema};
+use esport::Operation;
 use linera_sdk::{
     graphql::GraphQLMutationRoot as _, linera_base_types::WithServiceAbi, views::View, Service,
     ServiceRuntime,
 };
 
 use state::DiceState;
+
+use crate::state::PlayerProfile;
 
 #[derive(Clone)]
 pub struct DiceService {
@@ -21,7 +24,7 @@ pub struct DiceService {
 linera_sdk::service!(DiceService);
 
 impl WithServiceAbi for DiceService {
-    type Abi = crate::lib::DiceAbi;
+    type Abi = esport::DiceAbi;
 }
 
 impl Service for DiceService {
@@ -41,7 +44,7 @@ impl Service for DiceService {
         let schema = Schema::build(
             self.state.clone(),
             // No mutations exposed from the service; use the contract for operations.
-            crate::lib::Operation::mutation_root(self.runtime.clone()),
+            Operation::mutation_root(self.runtime.clone()),
             EmptySubscription,
         )
         .data(self.runtime.clone())
@@ -58,7 +61,7 @@ impl DiceState {
         ctx: &Context<'_>,
         match_id: u64,
     ) -> Option<linera_sdk::linera_base_types::AccountOwner> {
-        if let Some(record) = self.matches.get(match_id).await.unwrap() {
+        if let Some(record) = self.matches.get(&match_id).await.unwrap() {
             return record.winner.clone();
         }
         None
@@ -69,14 +72,15 @@ impl DiceState {
         &self,
         ctx: &Context<'_>,
         owner: linera_sdk::linera_base_types::AccountOwner,
-    ) -> Option<super::state::PlayerProfile> {
-        self.profiles.get(owner).await.unwrap()
+    ) -> Option<PlayerProfile> {
+        self.profiles.get(&owner).await.unwrap()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use async_graphql::Request;
+    use futures::FutureExt;
     use linera_sdk::{util::BlockingWait, views::View, ServiceRuntime};
 
     use super::*;
