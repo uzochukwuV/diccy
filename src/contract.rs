@@ -83,16 +83,16 @@ impl Contract for DiceContract {
 impl DiceContract {
     /// Registers a profile if missing.
     async fn register_player(&mut self, owner: AccountOwner) {
-        let mut profiles = self
+        let  profiles = self
             .state
             .profiles
-            .get_mut_or_default(owner)
+            .get_mut_or_default(&owner.clone())
             .await
             .unwrap();
-        let mut profile = profiles;
+        let  profile = profiles;
         profile.owner = owner.clone();
         // keep existing xp/stats if present
-        self.state.profiles.insert(owner, profile).unwrap();
+        self.state.profiles.insert(&owner, profile.clone()).unwrap();
     }
 
     /// Start a new match; returns assigned match id.
@@ -110,7 +110,7 @@ impl DiceContract {
         record.winner = None;
         record.settled = false;
 
-        self.state.matches.insert(match_id, record).unwrap();
+        self.state.matches.insert(&match_id, record).unwrap();
         match_id
     }
 
@@ -127,7 +127,7 @@ impl DiceContract {
         hits1: Vec<u32>,
     ) -> SettleOutcome {
         // Lookup match:
-        let mut record = match self.state.matches.get_mut(match_id).await {
+        let  record = match self.state.matches.get_mut(&match_id).await {
             Ok(Some(r)) => r,
             _ => {
                 return SettleOutcome {
@@ -154,12 +154,12 @@ impl DiceContract {
         if recomputed0 != hits0 || recomputed1 != hits1 {
             // If hits don't match recomputed, fall back to mock VRF using current system_time to decide winner.
             // This mock is only for demo purposes.
-            let now = self.runtime.system_time().timestamp_nanos() as u128;
+            let now = self.runtime.system_time().micros() as u128;
             let winner_index = (now % 2) as usize;
             let winner = record.players[winner_index].clone();
             record.winner = Some(winner.clone());
             record.settled = true;
-            self.state.matches.insert(match_id, record.clone()).unwrap();
+            self.state.matches.insert(&match_id, record.clone()).unwrap();
             // update profiles with a fallback result
             self.apply_settlement_effects(&record.players, winner_index)
                 .await;
@@ -191,7 +191,7 @@ impl DiceContract {
         record.hits_player1 = recomputed1.clone();
         record.winner = winner_opt.clone();
         record.settled = true;
-        self.state.matches.insert(match_id, record.clone()).unwrap();
+        self.state.matches.insert(&match_id, record.clone()).unwrap();
 
         // Apply XP and stats updates for the two players.
         match winner_index {
@@ -220,10 +220,10 @@ impl DiceContract {
             let mut profile = self
                 .state
                 .profiles
-                .get_mut_or_default(owner.clone())
+                .get_mut_or_default(&owner.clone())
                 .await
                 .unwrap();
-            if profile.owner == AccountOwner::default() {
+            if profile.owner == AccountOwner::Reserved(4) {
                 // first time default -> set owner
                 profile.owner = owner.clone();
             }
