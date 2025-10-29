@@ -53,29 +53,7 @@ impl Service for DiceService {
     }
 }
 
-#[async_graphql::Object]
-impl DiceState {
-    /// Returns winner (if a match is settled and there is a winner).
-    async fn match_winner(
-        &self,
-        ctx: &Context<'_>,
-        match_id: u64,
-    ) -> Option<linera_sdk::linera_base_types::AccountOwner> {
-        if let Some(record) = self.matches.get(&match_id).await.unwrap() {
-            return record.winner.clone();
-        }
-        None
-    }
 
-    /// Simple query for a player profile by owner.
-    async fn profile(
-        &self,
-        ctx: &Context<'_>,
-        owner: linera_sdk::linera_base_types::AccountOwner,
-    ) -> Option<PlayerProfile> {
-        self.profiles.get(&owner).await.unwrap()
-    }
-}
 
 #[cfg(test)]
 mod tests {

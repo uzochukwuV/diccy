@@ -83,16 +83,15 @@ impl Contract for DiceContract {
 impl DiceContract {
     /// Registers a profile if missing.
     async fn register_player(&mut self, owner: AccountOwner) {
-        let  profiles = self
-            .state
-            .profiles
-            .get_mut_or_default(&owner.clone())
-            .await
-            .unwrap();
-        let  profile = profiles;
+        // Read existing profile (if any), modify locally, then insert back.
+        let existing = self.state.profiles.get(&owner).await.unwrap();
+        let mut profile = match existing {
+            Some(p) => p,
+            None => PlayerProfile::default(),
+        };
         profile.owner = owner.clone();
-        // keep existing xp/stats if present
-        self.state.profiles.insert(&owner, profile.clone()).unwrap();
+        // keep existing xp/stats if present (already in `profile`)
+        self.state.profiles.insert(&owner, profile).unwrap();
     }
 
     /// Start a new match; returns assigned match id.
@@ -126,10 +125,14 @@ impl DiceContract {
         hits0: Vec<u32>,
         hits1: Vec<u32>,
     ) -> SettleOutcome {
-        // Lookup match:
-        let  record = match self.state.matches.get_mut(&match_id).await {
-            Ok(Some(r)) => r,
-            _ => {
+        // Lookup match: read owned record, don't hold a mutable borrow across inserts.
+        let record_opt = match self.state.matches.get(&match_id).await {
+            Ok(opt) => opt,
+            Err(_) => None,
+        };
+        let mut record = match record_opt {
+            Some(r) => r,
+            None => {
                 return SettleOutcome {
                     success: false,
                     winner: None,
@@ -217,12 +220,12 @@ impl DiceContract {
         // Winner gets +100 xp, loser +20 xp; level up every 200 xp -> +1 max damage.
         for i in 0..2 {
             let owner = players[i].clone();
-            let profile = self
-                .state
-                .profiles
-                .get_mut_or_default(&owner.clone())
-                .await
-                .unwrap();
+            // Read existing profile, modify locally, then insert back to avoid overlapping borrows.
+            let existing = self.state.profiles.get(&owner).await.unwrap();
+            let mut profile = match existing {
+                Some(p) => p,
+                None => PlayerProfile::default(),
+            };
             if profile.owner == AccountOwner::Reserved(4) {
                 // first time default -> set owner
                 profile.owner = owner.clone();
@@ -244,7 +247,7 @@ impl DiceContract {
                 profile.hp_max = profile.hp_max.saturating_add((leveled * 5) as u32);
             }
             // store back
-            self.state.profiles.insert(&owner.clone(), profile.clone()).unwrap();
+            self.state.profiles.insert(&owner.clone(), profile).unwrap();
         }
     }
 }
