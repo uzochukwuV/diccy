@@ -1,39 +1,85 @@
-// Copyright (c) Zefchain Labs, Inc.
-// SPDX-License-Identifier: Apache-2.0
-
-//! Integration testing for the esport application.
-
-#![cfg(not(target_arch = "wasm32"))]
-
 use esport::Operation;
 use linera_sdk::test::{QueryOutcome, TestValidator};
+use linera_sdk::linera_base_types::AccountOwner;
 
-/// Tests setting and incrementing a counter
-///
-/// Creates the application on a `chain`, initializing it with a 10 then add 10 and obtain 20.
-/// which is then checked.
 #[tokio::test(flavor = "multi_thread")]
-async fn single_chain_test() {
+async fn multiple_matches_increment_next_match_id() {
     let (validator, module_id) =
-        TestValidator::with_current_module::<esport::EsportAbi, (), u64>().await;
+        TestValidator::with_current_module::<esport::DiceAbi, (), u64>().await;
     let mut chain = validator.new_chain().await;
 
-    let initial_state = 10u64;
+    let initial_state = 0u64;
     let application_id = chain
         .create_application(module_id, (), initial_state, vec![])
         .await;
 
-    let increment = 10u64;
+    // Start two matches in two separate blocks.
     chain
         .add_block(|block| {
-            block.with_operation(application_id, Operation::Increment { value: increment });
+            block.with_operation(
+                application_id,
+                Operation::StartMatch {
+                    players: [AccountOwner::Reserved(1), AccountOwner::Reserved(2)],
+                    rounds: 3,
+                },
+            );
         })
         .await;
 
-    let final_value = initial_state + increment;
-    let QueryOutcome { response, .. } =
-        chain.graphql_query(application_id, "query { value }").await;
-    let state_value = response["value"].as_u64().expect("Failed to get the u64");
+    chain
+        .add_block(|block| {
+            block.with_operation(
+                application_id,
+                Operation::StartMatch {
+                    players: [AccountOwner::Reserved(3), AccountOwner::Reserved(4)],
+                    rounds: 2,
+                },
+            );
+        })
+        .await;
 
-    assert_eq!(state_value, final_value);
+    // Query nextMatchId (should have advanced twice)
+    let QueryOutcome { response, .. } =
+        chain.graphql_query(application_id, "query { nextMatchId }").await;
+    let next_match_id = response["nextMatchId"].as_u64().expect("Failed to get u64");
+
+    assert_eq!(next_match_id, 2);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn multiple_starts_in_single_block_apply() {
+    let (validator, module_id) =
+        TestValidator::with_current_module::<esport::DiceAbi, (), u64>().await;
+    let mut chain = validator.new_chain().await;
+
+    let initial_state = 0u64;
+    let application_id = chain
+        .create_application(module_id, (), initial_state, vec![])
+        .await;
+
+    // Two starts in the same block should both apply (nextMatchId increments twice).
+    chain
+        .add_block(|block| {
+            block.with_operation(
+                application_id,
+                Operation::StartMatch {
+                    players: [AccountOwner::Reserved(1), AccountOwner::Reserved(2)],
+                    rounds: 1,
+                },
+            );
+            block.with_operation(
+                application_id,
+                Operation::StartMatch {
+                    players: [AccountOwner::Reserved(3), AccountOwner::Reserved(4)],
+                    rounds: 1,
+                },
+            );
+        })
+        .await;
+
+    let QueryOutcome { response, .. } =
+        chain.graphql_query(application_id, "query { nextMatchId }").await;
+    let next_match_id = response["nextMatchId"].as_u64().expect("Failed to get u64");
+
+    assert_eq!(next_match_id, 2);
 }
