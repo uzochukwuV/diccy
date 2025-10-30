@@ -75,3 +75,8 @@ pub struct SettleOutcome {
     /// Message for human-readable explanation or error.
     pub message: String,
 }
+
+
+mod figment_service;
+mod service;
+mod state;

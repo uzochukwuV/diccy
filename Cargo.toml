@@ -23,6 +23,7 @@ path = "src/contract.rs"
 name = "esport_service"
 path = "src/service.rs"
 
+
 [profile.release]
 debug = true
 lto = true

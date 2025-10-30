@@ -1,4 +1,4 @@
-# Realtime Randomness Fighter Game - Real-Time Web3 Battle Arena
+# Fighter Game - Real-Time Web3 Battle Arena
 
 A production-ready, on-chain fighting game built on Linera blockchain featuring real-time combat, NFT progression, staking mechanics, prediction markets, and tournaments.
 

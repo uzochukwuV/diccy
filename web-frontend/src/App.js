@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import './App.css';
+ import * as linera from '@linera/client';
 
 function DiceIcon({ className }) {
   return (
@@ -110,7 +111,7 @@ function LiveFeed({ events, onSend }) {
       <div className="h-64 overflow-y-auto space-y-3 pr-2">
         {events.map((e, i) => (
           <p key={i} className="text-sm text-on-surface-muted">
-            {e}
+            <div dangerouslySetInnerHTML={{ __html: e }} ></div>
           </p>
         ))}
       </div>
@@ -490,10 +491,22 @@ function App() {
     setFeed((f) => [
       `<span class="text-primary font-semibold">New Bet:</span> ${amount} Tokens on <span class="text-on-surface font-semibold">${game.title}</span> by <span class="text-primary">User_${Math.floor(
         Math.random() * 100
-      )}</span>.`,
+      )}</span>`,
       ...f,
     ]);
   };
+
+  const  initLinera = async () => {
+    await linera.default();
+    const faucet = await new linera.Faucet(
+      'https://faucet.testnet-conway.linera.net',
+    );
+    const wallet = await faucet.createWallet();
+    const client = await new linera.Client(wallet);
+    document.getElementById('chain-id').innerText = await faucet.claimChain(client);
+  }
+
+ 
 
   return (
     <div className="relative flex h-auto min-h-screen w-full flex-col">
@@ -532,8 +545,8 @@ function App() {
         </div>
       </header>
 
-      <main className="flex-grow p-4 sm:p-6 lg:p-8">
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 max-w-screen-2xl mx-auto">
+      <main className="flex-grow p-4 sm:px-6 lg:px-8 flex flex-col ">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8  mx-auto flex-1">
           <aside className="lg:col-span-3 flex flex-col gap-6">
             <div className="flex h-full flex-col justify-between bg-surface p-6 rounded-xl">
               <div className="flex flex-col gap-4">
