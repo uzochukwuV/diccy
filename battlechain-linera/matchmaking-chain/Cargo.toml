@@ -1,0 +1,19 @@
+[package]
+name = "matchmaking-chain"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+async-trait = "0.1"
+linera-sdk = "0.13.0"
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "2.0"
+
+# Local dependencies
+shared-types = { path = "../shared-types" }
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dev-dependencies]
+tokio = { version = "1.0", features = ["full", "macros", "rt-multi-thread"] }
