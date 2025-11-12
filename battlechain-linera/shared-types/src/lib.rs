@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use linera_sdk::base::{ChainId, Owner, Timestamp};
+use linera_sdk::base::{Amount, ApplicationId, ChainId, Owner, Timestamp};
 use std::collections::HashMap;
 
 /// Character classes with unique abilities and stats
@@ -46,13 +46,11 @@ pub enum Stance {
     Counter,     // 90% atk, 40% counter
 }
 
-/// Currency types supported
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Currency types supported (BATTLE token only)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub enum Currency {
-    SOL,
-    USDC,
-    USDT,
-    Custom(String),
+    /// BattleChain native token
+    BATTLE,
 }
 
 /// Battle status
@@ -264,7 +262,7 @@ pub struct LeaderboardEntry {
     pub losses: u64,
     pub win_rate: f64,
     pub elo_rating: u64,
-    pub total_earnings: HashMap<Currency, u64>,
+    pub total_earnings_battle: Amount, // Total BATTLE tokens earned
 }
 
 /// Entropy seed for randomness
