@@ -1,9 +1,9 @@
-use async_graphql::{Request, Response, Schema, EmptySubscription};
+use async_graphql::{Request, Response, Schema, EmptySubscription, SimpleObject};
 use battlechain_shared_types::*;
 use linera_sdk::{
-    base::{ChainId, Owner, Timestamp, WithContractAbi},
+    base::{Amount, ApplicationId, ChainId, Owner, Timestamp, WithContractAbi},
     views::{RootView, View, ViewStorageContext},
-    Contract, Service,
+    Contract, Service, ContractRuntime, ServiceRuntime,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -29,17 +29,26 @@ pub struct PlayerChainState {
     /// Player inventory (items, consumables)
     pub items: Vec<Item>,
 
-    /// Currency balances (SOL, USDC, USDT, etc.)
-    pub currencies: HashMap<Currency, u64>,
+    /// BATTLE token application reference
+    pub battle_token_app: Option<ApplicationId>,
+
+    /// Cached BATTLE balance (updated from token app)
+    pub battle_balance: Amount,
+
+    /// Locked BATTLE tokens (in battles)
+    pub locked_battle: Amount,
 
     /// Player stats
     pub total_battles: u64,
     pub wins: u64,
     pub losses: u64,
-    pub total_earned: HashMap<Currency, u64>,
+    pub total_earned_battle: Amount,
 
     /// Active battles (references to battle chains)
     pub active_battles: Vec<ChainId>,
+
+    /// Locked stakes per battle
+    pub battle_stakes: HashMap<ChainId, Amount>,
 
     /// Preferences
     pub default_stance: Stance,
@@ -52,22 +61,20 @@ pub struct PlayerChainState {
 
 impl PlayerChainState {
     /// Initialize new player chain
-    pub fn new(owner: Owner, created_at: Timestamp) -> Self {
-        let mut currencies = HashMap::new();
-        currencies.insert(Currency::SOL, 0);
-        currencies.insert(Currency::USDC, 0);
-        currencies.insert(Currency::USDT, 0);
-
+    pub fn new(owner: Owner, battle_token_app: Option<ApplicationId>, created_at: Timestamp) -> Self {
         Self {
             owner,
             characters: Vec::new(),
             items: Vec::new(),
-            currencies,
+            battle_token_app,
+            battle_balance: Amount::ZERO,
+            locked_battle: Amount::ZERO,
             total_battles: 0,
             wins: 0,
             losses: 0,
-            total_earned: HashMap::new(),
+            total_earned_battle: Amount::ZERO,
             active_battles: Vec::new(),
+            battle_stakes: HashMap::new(),
             default_stance: Stance::Balanced,
             auto_play: false,
             created_at,
@@ -85,22 +92,64 @@ impl PlayerChainState {
         self.characters.iter_mut().find(|c| c.nft_id == nft_id)
     }
 
-    /// Add currency balance
-    pub fn add_currency(&mut self, currency: Currency, amount: u64) -> Result<(), PlayerChainError> {
-        let balance = self.currencies.entry(currency).or_insert(0);
-        *balance = balance
+    /// Get available BATTLE balance (total - locked)
+    pub fn available_balance(&self) -> Amount {
+        self.battle_balance.saturating_sub(self.locked_battle)
+    }
+
+    /// Lock BATTLE for battle stake
+    pub fn lock_battle(&mut self, battle_chain: ChainId, amount: Amount) -> Result<(), PlayerChainError> {
+        if self.available_balance() < amount {
+            return Err(PlayerChainError::InsufficientBalance {
+                available: self.available_balance(),
+                required: amount,
+            });
+        }
+
+        self.locked_battle = self.locked_battle
             .checked_add(amount)
             .ok_or(PlayerChainError::MathOverflow)?;
+
+        self.battle_stakes.insert(battle_chain, amount);
+
         Ok(())
     }
 
-    /// Subtract currency balance
-    pub fn sub_currency(&mut self, currency: &Currency, amount: u64) -> Result<(), PlayerChainError> {
-        let balance = self.currencies.get_mut(currency)
-            .ok_or(PlayerChainError::InsufficientBalance)?;
-        *balance = balance
+    /// Unlock BATTLE from battle
+    pub fn unlock_battle(&mut self, battle_chain: &ChainId) -> Result<Amount, PlayerChainError> {
+        let amount = self.battle_stakes
+            .remove(battle_chain)
+            .ok_or(PlayerChainError::BattleNotFound)?;
+
+        self.locked_battle = self.locked_battle
             .checked_sub(amount)
-            .ok_or(PlayerChainError::InsufficientBalance)?;
+            .ok_or(PlayerChainError::MathOverflow)?;
+
+        Ok(amount)
+    }
+
+    /// Add BATTLE to balance (from winnings or transfers)
+    pub fn credit_battle(&mut self, amount: Amount) -> Result<(), PlayerChainError> {
+        self.battle_balance = self.battle_balance
+            .checked_add(amount)
+            .ok_or(PlayerChainError::MathOverflow)?;
+
+        Ok(())
+    }
+
+    /// Deduct BATTLE from balance (for transfers or stakes)
+    pub fn debit_battle(&mut self, amount: Amount) -> Result<(), PlayerChainError> {
+        if self.available_balance() < amount {
+            return Err(PlayerChainError::InsufficientBalance {
+                available: self.available_balance(),
+                required: amount,
+            });
+        }
+
+        self.battle_balance = self.battle_balance
+            .checked_sub(amount)
+            .ok_or(PlayerChainError::MathOverflow)?;
+
         Ok(())
     }
 
@@ -117,6 +166,11 @@ impl PlayerChainState {
 /// Operations on Player Chain
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Operation {
+    /// Initialize with BATTLE token app
+    Initialize {
+        battle_token_app: ApplicationId,
+    },
+
     /// Create a new character from NFT
     CreateCharacter {
         nft_id: String,
@@ -137,30 +191,21 @@ pub enum Operation {
         did_win: bool,
     },
 
-    /// Deposit currency
-    DepositCurrency {
-        currency: Currency,
-        amount: u64,
+    /// Transfer BATTLE tokens to another player
+    TransferBattle {
+        to: Owner,
+        amount: Amount,
     },
 
-    /// Withdraw currency
-    WithdrawCurrency {
-        currency: Currency,
-        amount: u64,
-    },
-
-    /// Lock currency for battle stake
+    /// Lock BATTLE for battle stake
     LockStakeForBattle {
-        battle_id: String,
-        currency: Currency,
-        amount: u64,
+        battle_chain: ChainId,
+        amount: Amount,
     },
 
-    /// Unlock stake after battle
+    /// Unlock stake after battle cancelled
     UnlockStake {
-        battle_id: String,
-        currency: Currency,
-        amount: u64,
+        battle_chain: ChainId,
     },
 
     /// Update preferences
@@ -179,6 +224,14 @@ pub enum Operation {
         item_id: String,
         quantity: u32,
     },
+
+    /// Refresh BATTLE balance from token app
+    RefreshBattleBalance,
+
+    /// Register player chain with matchmaking
+    RegisterWithMatchmaking {
+        matchmaking_chain: ChainId,
+    },
 }
 
 /// Messages received by Player Chain
@@ -194,23 +247,44 @@ pub enum Message {
     /// Battle result notification
     BattleResult {
         battle_id: String,
+        battle_chain: ChainId,
         winner: Owner,
         xp_earned: u64,
-        currency_won: Currency,
-        amount_won: u64,
+        amount_won: Amount,
     },
 
-    /// Currency transfer from another chain
-    TransferCurrency {
-        currency: Currency,
-        amount: u64,
+    /// BATTLE token credit (from token app or battle winnings)
+    CreditBattle {
+        amount: Amount,
         from_chain: ChainId,
+        reason: String,
     },
 
     /// Character registered in global registry
     CharacterRegistered {
         nft_id: String,
         registry_chain: ChainId,
+    },
+
+    /// Balance update from BATTLE token app
+    BalanceUpdate {
+        new_balance: Amount,
+    },
+
+    /// Request from Matchmaking to lock stake for battle
+    LockStakeRequest {
+        match_id: u64,
+        amount: Amount,
+        opponent: Owner,
+        battle_chain: ChainId,
+        matchmaking_chain: ChainId,
+    },
+
+    /// Battle is ready to start (both stakes confirmed)
+    BattleReady {
+        match_id: u64,
+        battle_chain: ChainId,
+        opponent: Owner,
     },
 }
 
@@ -226,8 +300,11 @@ pub enum PlayerChainError {
     #[error("Character is currently in battle")]
     CharacterInBattle,
 
-    #[error("Insufficient balance")]
-    InsufficientBalance,
+    #[error("Insufficient balance: have {available}, need {required}")]
+    InsufficientBalance {
+        available: Amount,
+        required: Amount,
+    },
 
     #[error("Math overflow")]
     MathOverflow,
@@ -240,6 +317,21 @@ pub enum PlayerChainError {
 
     #[error("Item not found: {0}")]
     ItemNotFound(String),
+
+    #[error("Battle not found")]
+    BattleNotFound,
+
+    #[error("BATTLE token app not initialized")]
+    TokenAppNotInitialized,
+
+    #[error("View error: {0}")]
+    ViewError(String),
+}
+
+impl From<linera_sdk::views::views::ViewError> for PlayerChainError {
+    fn from(err: linera_sdk::views::views::ViewError) -> Self {
+        PlayerChainError::ViewError(format!("{:?}", err))
+    }
 }
 
 /// Player Chain Contract
@@ -250,11 +342,10 @@ pub struct PlayerChainContract {
 
 impl Contract for PlayerChainContract {
     type Message = Message;
-    type Parameters = Owner; // Initialize with owner
+    type Parameters = Option<ApplicationId>; // Optional BATTLE token app
     type InstantiationArgument = ();
 
     async fn load(runtime: ContractRuntime<Self>) -> Self {
-        let owner = runtime.chain_ownership().owner().expect("Chain must have owner");
         let state = PlayerChainState::load(runtime.root_view_storage_context())
             .await
             .expect("Failed to load state");
@@ -263,16 +354,34 @@ impl Contract for PlayerChainContract {
     }
 
     async fn instantiate(&mut self, _argument: ()) {
-        let owner = self.runtime.chain_ownership().owner()
+        let battle_token_app = self.runtime.parameters();
+        let owner = self.runtime.chain_ownership().owner
             .expect("Chain must have owner");
         let now = self.runtime.system_time();
 
-        self.state = PlayerChainState::new(owner, now);
-        self.runtime.emit(format!("Player chain initialized for owner: {}", owner));
+        self.state = PlayerChainState::new(owner, battle_token_app, now);
+
+        if let Some(app_id) = battle_token_app {
+            self.runtime.emit(format!(
+                "Player chain initialized for owner: {} with BATTLE token app: {}",
+                owner, app_id
+            ));
+        } else {
+            self.runtime.emit(format!(
+                "Player chain initialized for owner: {} (BATTLE token app will be set later)",
+                owner
+            ));
+        }
     }
 
     async fn execute_operation(&mut self, operation: Operation) -> Self::Response {
+        let now = self.runtime.system_time();
+        self.state.last_active = now;
+
         match operation {
+            Operation::Initialize { battle_token_app } => {
+                self.initialize_token_app(battle_token_app).await
+            }
             Operation::CreateCharacter { nft_id, class } => {
                 self.create_character(nft_id, class).await
             }
@@ -288,25 +397,14 @@ impl Contract for PlayerChainContract {
                 self.update_character_after_battle(nft_id, xp_gained, hp_remaining, did_win)
                     .await
             }
-            Operation::DepositCurrency { currency, amount } => {
-                self.deposit_currency(currency, amount).await
+            Operation::TransferBattle { to, amount } => {
+                self.transfer_battle(to, amount).await
             }
-            Operation::WithdrawCurrency { currency, amount } => {
-                self.withdraw_currency(currency, amount).await
+            Operation::LockStakeForBattle { battle_chain, amount } => {
+                self.lock_stake(battle_chain, amount).await
             }
-            Operation::LockStakeForBattle {
-                battle_id,
-                currency,
-                amount,
-            } => {
-                self.lock_stake(battle_id, currency, amount).await
-            }
-            Operation::UnlockStake {
-                battle_id,
-                currency,
-                amount,
-            } => {
-                self.unlock_stake(battle_id, currency, amount).await
+            Operation::UnlockStake { battle_chain } => {
+                self.unlock_stake(battle_chain).await
             }
             Operation::UpdatePreferences {
                 default_stance,
@@ -319,6 +417,12 @@ impl Contract for PlayerChainContract {
             }
             Operation::RemoveItem { item_id, quantity } => {
                 self.remove_item(item_id, quantity).await
+            }
+            Operation::RefreshBattleBalance => {
+                self.refresh_battle_balance().await
+            }
+            Operation::RegisterWithMatchmaking { matchmaking_chain } => {
+                self.register_with_matchmaking(matchmaking_chain).await
             }
         }
     }
@@ -335,20 +439,20 @@ impl Contract for PlayerChainContract {
             }
             Message::BattleResult {
                 battle_id,
+                battle_chain,
                 winner,
                 xp_earned,
-                currency_won,
                 amount_won,
             } => {
-                self.handle_battle_result(battle_id, winner, xp_earned, currency_won, amount_won)
+                self.handle_battle_result(battle_id, battle_chain, winner, xp_earned, amount_won)
                     .await;
             }
-            Message::TransferCurrency {
-                currency,
+            Message::CreditBattle {
                 amount,
                 from_chain,
+                reason,
             } => {
-                self.handle_transfer_currency(currency, amount, from_chain)
+                self.handle_credit_battle(amount, from_chain, reason)
                     .await;
             }
             Message::CharacterRegistered {
@@ -356,6 +460,27 @@ impl Contract for PlayerChainContract {
                 registry_chain,
             } => {
                 self.handle_character_registered(nft_id, registry_chain)
+                    .await;
+            }
+            Message::BalanceUpdate { new_balance } => {
+                self.handle_balance_update(new_balance).await;
+            }
+            Message::LockStakeRequest {
+                match_id,
+                amount,
+                opponent,
+                battle_chain,
+                matchmaking_chain,
+            } => {
+                self.handle_lock_stake_request(match_id, amount, opponent, battle_chain, matchmaking_chain)
+                    .await;
+            }
+            Message::BattleReady {
+                match_id,
+                battle_chain,
+                opponent,
+            } => {
+                self.handle_battle_ready(match_id, battle_chain, opponent)
                     .await;
             }
         }
@@ -367,6 +492,19 @@ impl Contract for PlayerChainContract {
 }
 
 impl PlayerChainContract {
+    /// Initialize BATTLE token app reference
+    async fn initialize_token_app(&mut self, battle_token_app: ApplicationId) -> () {
+        self.state.battle_token_app = Some(battle_token_app);
+
+        self.runtime.emit(format!(
+            "BATTLE token app set to: {}",
+            battle_token_app
+        ));
+
+        // Refresh balance from token app
+        self.refresh_battle_balance().await;
+    }
+
     /// Create a new character from NFT
     async fn create_character(&mut self, nft_id: String, class: CharacterClass) -> () {
         // Check if character already exists
@@ -382,7 +520,6 @@ impl PlayerChainContract {
         let character = CharacterNFT::new(nft_id.clone(), class, now);
 
         self.state.characters.push(character.clone());
-        self.state.last_active = now;
 
         self.runtime.emit(format!(
             "Character created: {} (class: {:?}, level: {})",
@@ -455,45 +592,44 @@ impl PlayerChainContract {
         }
     }
 
-    /// Deposit currency into player balance
-    async fn deposit_currency(&mut self, currency: Currency, amount: u64) -> () {
-        match self.state.add_currency(currency.clone(), amount) {
+    /// Transfer BATTLE tokens to another player
+    async fn transfer_battle(&mut self, to: Owner, amount: Amount) -> () {
+        let token_app = match self.state.battle_token_app {
+            Some(app) => app,
+            None => {
+                self.runtime.emit("BATTLE token app not initialized".to_string());
+                return;
+            }
+        };
+
+        match self.state.debit_battle(amount) {
             Ok(_) => {
                 self.runtime.emit(format!(
-                    "Deposited {} of {:?}",
-                    amount, currency
+                    "Transfer {} BATTLE to {} (via token app: {})",
+                    amount, to, token_app
                 ));
+
+                // TODO: Send cross-application message to BATTLE token app
+                // self.runtime.call_application(
+                //     token_app,
+                //     BattleTokenOperation::Transfer { to, amount }
+                // ).await;
             }
             Err(e) => {
-                self.runtime.emit(format!("Deposit failed: {}", e));
+                self.runtime.emit(format!("Transfer failed: {}", e));
             }
         }
     }
 
-    /// Withdraw currency from player balance
-    async fn withdraw_currency(&mut self, currency: Currency, amount: u64) -> () {
-        match self.state.sub_currency(&currency, amount) {
+    /// Lock BATTLE for battle stake
+    async fn lock_stake(&mut self, battle_chain: ChainId, amount: Amount) -> () {
+        match self.state.lock_battle(battle_chain, amount) {
             Ok(_) => {
                 self.runtime.emit(format!(
-                    "Withdrew {} of {:?}",
-                    amount, currency
+                    "Locked {} BATTLE for battle on chain {}",
+                    amount, battle_chain
                 ));
-            }
-            Err(e) => {
-                self.runtime.emit(format!("Withdrawal failed: {}", e));
-            }
-        }
-    }
-
-    /// Lock currency for battle stake
-    async fn lock_stake(&mut self, battle_id: String, currency: Currency, amount: u64) -> () {
-        match self.state.sub_currency(&currency, amount) {
-            Ok(_) => {
-                self.runtime.emit(format!(
-                    "Locked {} of {:?} for battle {}",
-                    amount, currency, battle_id
-                ));
-                // TODO: Send message to battle chain or matchmaking chain
+                // TODO: Send transfer message to battle chain via token app
             }
             Err(e) => {
                 self.runtime.emit(format!("Lock stake failed: {}", e));
@@ -502,12 +638,12 @@ impl PlayerChainContract {
     }
 
     /// Unlock stake after battle cancelled
-    async fn unlock_stake(&mut self, battle_id: String, currency: Currency, amount: u64) -> () {
-        match self.state.add_currency(currency.clone(), amount) {
-            Ok(_) => {
+    async fn unlock_stake(&mut self, battle_chain: ChainId) -> () {
+        match self.state.unlock_battle(&battle_chain) {
+            Ok(amount) => {
                 self.runtime.emit(format!(
-                    "Unlocked {} of {:?} from battle {}",
-                    amount, currency, battle_id
+                    "Unlocked {} BATTLE from battle {}",
+                    amount, battle_chain
                 ));
             }
             Err(e) => {
@@ -562,6 +698,46 @@ impl PlayerChainContract {
         }
     }
 
+    /// Refresh BATTLE balance from token app
+    async fn refresh_battle_balance(&mut self) -> () {
+        if self.state.battle_token_app.is_none() {
+            self.runtime.emit("BATTLE token app not initialized".to_string());
+            return;
+        }
+
+        // TODO: Query BATTLE token app for current balance
+        // let balance = self.runtime.query_application(
+        //     self.state.battle_token_app.unwrap(),
+        //     format!("query {{ balanceOf(account: \"{}\") }}", self.state.owner)
+        // ).await;
+
+        // self.state.battle_balance = balance;
+
+        self.runtime.emit(format!(
+            "Balance refreshed: {} BATTLE (available: {})",
+            self.state.battle_balance,
+            self.state.available_balance()
+        ));
+    }
+
+    /// Register this player chain with the Matchmaking chain
+    async fn register_with_matchmaking(&mut self, matchmaking_chain: ChainId) -> () {
+        self.runtime.emit(format!(
+            "Registering player chain {} with Matchmaking at {}",
+            self.runtime.chain_id(),
+            matchmaking_chain
+        ));
+
+        // TODO: Send RegisterPlayerChain operation to Matchmaking
+        // This requires cross-application operation call:
+        // self.runtime.call_application(
+        //     matchmaking_chain,
+        //     MatchmakingOperation::RegisterPlayerChain {
+        //         player_chain: self.runtime.chain_id(),
+        //     }
+        // ).await;
+    }
+
     /// Handle battle started message
     async fn handle_battle_started(&mut self, battle_id: String, battle_chain: ChainId, opponent: Owner) {
         self.state.active_battles.push(battle_chain);
@@ -576,40 +752,47 @@ impl PlayerChainContract {
     async fn handle_battle_result(
         &mut self,
         battle_id: String,
+        battle_chain: ChainId,
         winner: Owner,
         xp_earned: u64,
-        currency_won: Currency,
-        amount_won: u64,
+        amount_won: Amount,
     ) {
         let did_win = winner == self.state.owner;
 
-        // Credit winnings
-        if amount_won > 0 {
-            let _ = self.state.add_currency(currency_won.clone(), amount_won);
+        // Unlock stake and credit winnings
+        if let Ok(stake) = self.state.unlock_battle(&battle_chain) {
+            if did_win && amount_won > Amount::ZERO {
+                let _ = self.state.credit_battle(amount_won);
+                let _ = self.state.credit_battle(stake);
 
-            let earned = self.state.total_earned.entry(currency_won.clone()).or_insert(0);
-            *earned += amount_won;
+                let total_earnings = &mut self.state.total_earned_battle;
+                *total_earnings = total_earnings
+                    .checked_add(amount_won)
+                    .unwrap_or(*total_earnings);
+            } else if !did_win {
+                // Lost - stake is gone
+            }
         }
 
+        // Remove from active battles
+        self.state.active_battles.retain(|c| c != &battle_chain);
+
         self.runtime.emit(format!(
-            "Battle {} ended. Winner: {}. XP earned: {}. Won: {} {:?}",
+            "Battle {} ended. Winner: {}. XP earned: {}. Won: {} BATTLE",
             battle_id,
             if did_win { "You" } else { "Opponent" },
             xp_earned,
-            amount_won,
-            currency_won
+            amount_won
         ));
-
-        // TODO: Update character with battle results
     }
 
-    /// Handle currency transfer from another chain
-    async fn handle_transfer_currency(&mut self, currency: Currency, amount: u64, from_chain: ChainId) {
-        let _ = self.state.add_currency(currency.clone(), amount);
+    /// Handle BATTLE token credit
+    async fn handle_credit_battle(&mut self, amount: Amount, from_chain: ChainId, reason: String) {
+        let _ = self.state.credit_battle(amount);
 
         self.runtime.emit(format!(
-            "Received {} {:?} from chain {}",
-            amount, currency, from_chain
+            "Received {} BATTLE from chain {} (reason: {})",
+            amount, from_chain, reason
         ));
     }
 
@@ -618,6 +801,71 @@ impl PlayerChainContract {
         self.runtime.emit(format!(
             "Character {} registered in global registry on chain {}",
             nft_id, registry_chain
+        ));
+    }
+
+    /// Handle balance update from token app
+    async fn handle_balance_update(&mut self, new_balance: Amount) {
+        self.state.battle_balance = new_balance;
+
+        self.runtime.emit(format!(
+            "Balance updated: {} BATTLE (available: {})",
+            new_balance,
+            self.state.available_balance()
+        ));
+    }
+
+    /// Handle lock stake request from Matchmaking
+    async fn handle_lock_stake_request(
+        &mut self,
+        match_id: u64,
+        amount: Amount,
+        opponent: Owner,
+        battle_chain: ChainId,
+        matchmaking_chain: ChainId,
+    ) {
+        // Try to lock the stake
+        match self.state.lock_battle(battle_chain, amount) {
+            Ok(()) => {
+                self.runtime.emit(format!(
+                    "Locked {} BATTLE for match {} against {}",
+                    amount, match_id, opponent
+                ));
+
+                // TODO: Send ConfirmStake message back to Matchmaking
+                // This requires cross-application messaging:
+                // self.runtime.send_message(
+                //     matchmaking_chain,
+                //     MatchmakingMessage::ConfirmStake {
+                //         match_id,
+                //         player: self.state.owner,
+                //     }
+                // );
+            }
+            Err(e) => {
+                self.runtime.emit(format!(
+                    "Failed to lock stake for match {}: {}",
+                    match_id, e
+                ));
+
+                // TODO: Send stake lock failure message to Matchmaking
+                // so it can cancel the match
+            }
+        }
+    }
+
+    /// Handle battle ready notification
+    async fn handle_battle_ready(
+        &mut self,
+        match_id: u64,
+        battle_chain: ChainId,
+        opponent: Owner,
+    ) {
+        self.state.active_battles.push(battle_chain);
+
+        self.runtime.emit(format!(
+            "Battle ready! Match {} on chain {} against {}. Submit your turns to begin combat.",
+            match_id, battle_chain, opponent
         ));
     }
 }
@@ -673,16 +921,13 @@ impl<'a> QueryRoot<'a> {
         self.state.get_character(&nft_id).cloned()
     }
 
-    /// Get currency balances
-    async fn balances(&self) -> Vec<CurrencyBalance> {
-        self.state
-            .currencies
-            .iter()
-            .map(|(currency, amount)| CurrencyBalance {
-                currency: format!("{:?}", currency),
-                amount: *amount,
-            })
-            .collect()
+    /// Get BATTLE token balance
+    async fn battle_balance(&self) -> BattleBalance {
+        BattleBalance {
+            total: self.state.battle_balance.to_string(),
+            locked: self.state.locked_battle.to_string(),
+            available: self.state.available_balance().to_string(),
+        }
     }
 
     /// Get player stats
@@ -692,6 +937,7 @@ impl<'a> QueryRoot<'a> {
             wins: self.state.wins,
             losses: self.state.losses,
             win_rate: self.state.win_rate(),
+            total_earned: self.state.total_earned_battle.to_string(),
         }
     }
 
@@ -709,6 +955,18 @@ impl<'a> QueryRoot<'a> {
             .collect()
     }
 
+    /// Get locked stakes per battle
+    async fn locked_stakes(&self) -> Vec<LockedStake> {
+        self.state
+            .battle_stakes
+            .iter()
+            .map(|(chain, amount)| LockedStake {
+                battle_chain: format!("{}", chain),
+                amount: amount.to_string(),
+            })
+            .collect()
+    }
+
     /// Get preferences
     async fn preferences(&self) -> PlayerPreferences {
         PlayerPreferences {
@@ -716,24 +974,37 @@ impl<'a> QueryRoot<'a> {
             auto_play: self.state.auto_play,
         }
     }
+
+    /// Get BATTLE token app ID
+    async fn battle_token_app(&self) -> Option<String> {
+        self.state.battle_token_app.map(|app| format!("{}", app))
+    }
 }
 
 /// GraphQL types
-#[derive(async_graphql::SimpleObject)]
-struct CurrencyBalance {
-    currency: String,
-    amount: u64,
+#[derive(SimpleObject)]
+struct BattleBalance {
+    total: String,
+    locked: String,
+    available: String,
 }
 
-#[derive(async_graphql::SimpleObject)]
+#[derive(SimpleObject)]
 struct PlayerStats {
     total_battles: u64,
     wins: u64,
     losses: u64,
     win_rate: f64,
+    total_earned: String,
 }
 
-#[derive(async_graphql::SimpleObject)]
+#[derive(SimpleObject)]
+struct LockedStake {
+    battle_chain: String,
+    amount: String,
+}
+
+#[derive(SimpleObject)]
 struct PlayerPreferences {
     default_stance: String,
     auto_play: bool,
