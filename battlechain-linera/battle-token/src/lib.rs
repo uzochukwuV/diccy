@@ -1,11 +1,14 @@
 use async_graphql::{Request, Response, Schema, EmptySubscription, SimpleObject};
 use linera_sdk::{
-    base::{Amount, ApplicationId, ChainId, Owner, Timestamp, WithContractAbi},
+    linera_base_types::{Amount, ApplicationId, ChainId, Timestamp, WithContractAbi},
     views::{MapView, RootView, View, ViewStorageContext},
     Contract, Service, ContractRuntime, ServiceRuntime,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
+// Owner type in newer SDK
+type Owner = linera_sdk::linera_base_types::Account;
 
 /// BATTLE Token Application ABI
 pub struct BattleTokenAbi;

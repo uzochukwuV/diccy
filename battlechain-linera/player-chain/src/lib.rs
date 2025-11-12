@@ -1,7 +1,7 @@
 use async_graphql::{Request, Response, Schema, EmptySubscription, SimpleObject};
 use battlechain_shared_types::*;
 use linera_sdk::{
-    base::{Amount, ApplicationId, ChainId, Owner, Timestamp, WithContractAbi},
+    linera_base_types::{Amount, ApplicationId, ChainId, Timestamp, WithContractAbi},
     views::{RootView, View, ViewStorageContext},
     Contract, Service, ContractRuntime, ServiceRuntime,
 };

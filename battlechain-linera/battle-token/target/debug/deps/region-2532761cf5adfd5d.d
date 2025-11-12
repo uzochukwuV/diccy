@@ -1,0 +1,15 @@
+/home/user/diccy/battlechain-linera/battle-token/target/debug/deps/libregion-2532761cf5adfd5d.rmeta: /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/region-3.0.2/src/lib.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/region-3.0.2/src/alloc.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/region-3.0.2/src/error.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/region-3.0.2/src/lock.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/region-3.0.2/src/os/mod.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/region-3.0.2/src/os/unix.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/region-3.0.2/src/os/linux.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/region-3.0.2/src/page.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/region-3.0.2/src/protect.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/region-3.0.2/src/query.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/region-3.0.2/src/util.rs
+
+/home/user/diccy/battlechain-linera/battle-token/target/debug/deps/region-2532761cf5adfd5d.d: /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/region-3.0.2/src/lib.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/region-3.0.2/src/alloc.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/region-3.0.2/src/error.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/region-3.0.2/src/lock.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/region-3.0.2/src/os/mod.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/region-3.0.2/src/os/unix.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/region-3.0.2/src/os/linux.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/region-3.0.2/src/page.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/region-3.0.2/src/protect.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/region-3.0.2/src/query.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/region-3.0.2/src/util.rs
+
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/region-3.0.2/src/lib.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/region-3.0.2/src/alloc.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/region-3.0.2/src/error.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/region-3.0.2/src/lock.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/region-3.0.2/src/os/mod.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/region-3.0.2/src/os/unix.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/region-3.0.2/src/os/linux.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/region-3.0.2/src/page.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/region-3.0.2/src/protect.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/region-3.0.2/src/query.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/region-3.0.2/src/util.rs:

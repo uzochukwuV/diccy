@@ -1,0 +1,16 @@
+cargo:rustc-check-cfg=cfg(web)
+cargo:rustc-check-cfg=cfg(with_fs)
+cargo:rustc-cfg=with_fs
+cargo:rustc-check-cfg=cfg(with_metrics)
+cargo:rustc-cfg=with_metrics
+cargo:rustc-check-cfg=cfg(with_graphql)
+cargo:rustc-cfg=with_graphql
+cargo:rustc-check-cfg=cfg(with_testing)
+cargo:rustc-check-cfg=cfg(with_tokio_multi_thread)
+cargo:rustc-cfg=with_tokio_multi_thread
+cargo:rustc-check-cfg=cfg(with_wasmer)
+cargo:rustc-cfg=with_wasmer
+cargo:rustc-check-cfg=cfg(with_revm)
+cargo:rustc-check-cfg=cfg(with_wasmtime)
+cargo:rustc-check-cfg=cfg(with_wasm_runtime)
+cargo:rustc-cfg=with_wasm_runtime

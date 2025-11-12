@@ -1,13 +1,13 @@
 use async_trait::async_trait;
 use linera_sdk::{
-    base::{Amount, ApplicationId, ChainId, Owner, Timestamp},
+    linera_base_types::{Amount, ApplicationId, ChainId, Timestamp},
     views::{RootView, ViewStorageContext},
     Contract, ContractRuntime, Service, ServiceRuntime,
 };
 use serde::{Deserialize, Serialize};
 use shared_types::{
     derive_random_u64, mul_fp, random_in_range, CharacterClass, CharacterSnapshot, EntropySeed,
-    FP_SCALE, MAX_COMBO_STACK, Stance,
+    FP_SCALE, MAX_COMBO_STACK, Owner, Stance,
 };
 use thiserror::Error;
 
