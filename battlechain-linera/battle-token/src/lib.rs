@@ -110,14 +110,14 @@ impl BattleTokenState {
         let new_from_balance = from_balance
             .try_sub(amount)
             .map_err(|_| TokenError::MathOverflow)?;
-        self.balances.insert(&from, new_from_balance).await?;
+        self.balances.insert(&from, new_from_balance)?;
 
         // Add to recipient
         let to_balance = self.balance_of(&to).await;
         let new_to_balance = to_balance
             .try_add(amount)
             .map_err(|_| TokenError::MathOverflow)?;
-        self.balances.insert(&to, new_to_balance).await?;
+        self.balances.insert(&to, new_to_balance)?;
 
         // Track new holder
         if to_balance == Amount::ZERO && amount > Amount::ZERO {
@@ -145,7 +145,7 @@ impl BattleTokenState {
             return Err(TokenError::SelfApproval);
         }
 
-        self.allowances.insert(&(owner, spender), amount).await?;
+        self.allowances.insert(&(owner, spender), amount)?;
         Ok(())
     }
 
@@ -181,8 +181,7 @@ impl BattleTokenState {
             .try_sub(amount)
             .map_err(|_| TokenError::MathOverflow)?;
         self.allowances
-            .insert(&(from, spender), new_allowance)
-            .await?;
+            .insert(&(from, spender), new_allowance)?;
 
         // Transfer tokens
         self.transfer(from, to, amount, now).await
@@ -204,7 +203,7 @@ impl BattleTokenState {
 
         // Remove from account
         let new_balance = balance.try_sub(amount).map_err(|_| TokenError::MathOverflow)?;
-        self.balances.insert(&from, new_balance).await?;
+        self.balances.insert(&from, new_balance)?;
 
         // Reduce total supply
         self.total_supply = self
@@ -231,7 +230,7 @@ impl BattleTokenState {
         // Add to recipient
         let balance = self.balance_of(&to).await;
         let new_balance = balance.try_add(amount).map_err(|_| TokenError::MathOverflow)?;
-        self.balances.insert(&to, new_balance).await?;
+        self.balances.insert(&to, new_balance)?;
 
         // Increase total supply
         self.total_supply = self
@@ -328,8 +327,8 @@ pub enum TokenError {
     ViewError(String),
 }
 
-impl From<linera_sdk::views::views::ViewError> for TokenError {
-    fn from(err: linera_sdk::views::views::ViewError) -> Self {
+impl From<linera_sdk::views::ViewError> for TokenError {
+    fn from(err: linera_sdk::views::ViewError) -> Self {
         TokenError::ViewError(format!("{:?}", err))
     }
 }
@@ -361,14 +360,11 @@ impl Contract for BattleTokenContract {
     }
 
     async fn instantiate(&mut self, _argument: ()) {
-        let initial_supply = self.runtime.parameters();
-        let chain_ownership = self
-            .runtime
-            .initial_chain_ownership()
-            .expect("Failed to query initial chain ownership");
+        let initial_supply = self.runtime.application_parameters();
+        let chain_ownership = self.runtime.chain_ownership();
         let creator = chain_ownership
             .super_owners
-            .keys()
+            .iter()
             .next()
             .expect("No super owners found")
             .clone();
@@ -381,7 +377,6 @@ impl Contract for BattleTokenContract {
         self.state
             .balances
             .insert(&creator, initial_supply)
-            .await
             .expect("Failed to set initial balance");
 
         self.runtime.emit(format!(
