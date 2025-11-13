@@ -1,11 +1,12 @@
 use async_graphql::{Request, Response, Schema, EmptySubscription, SimpleObject};
 use linera_sdk::{
     abi::{ContractAbi, ServiceAbi, WithContractAbi, WithServiceAbi},
-    linera_base_types::{AccountOwner, Amount, ApplicationId, ChainId, Timestamp},
-    views::{MapView, RootView, ViewStorageContext},
+    linera_base_types::{AccountOwner, Amount, ChainId, Timestamp},
+    views::{MapView, RegisterView, RootView, View, ViewStorageContext},
     Contract, Service, ContractRuntime, ServiceRuntime,
 };
 use serde::{Deserialize, Serialize};
+use std::marker::PhantomData;
 use thiserror::Error;
 
 // Type alias for consistency
@@ -26,12 +27,13 @@ impl ServiceAbi for BattleTokenAbi {
 
 /// Token State - manages all BATTLE token balances and operations
 #[derive(RootView)]
-pub struct BattleTokenState {
+#[view(context = C)]
+pub struct BattleTokenState<C> {
     /// Token metadata
-    pub name: String,
-    pub symbol: String,
-    pub decimals: u8,
-    pub total_supply: Amount,
+    pub name: RegisterView<String>,
+    pub symbol: RegisterView<String>,
+    pub decimals: RegisterView<u8>,
+    pub total_supply: RegisterView<Amount>,
 
     /// Account balances (Owner -> Amount)
     pub balances: MapView<Owner, Amount>,
@@ -40,43 +42,29 @@ pub struct BattleTokenState {
     pub allowances: MapView<(Owner, Owner), Amount>,
 
     /// Account registry for iteration
-    pub accounts: Vec<Owner>,
+    pub accounts: RegisterView<Vec<Owner>>,
 
     /// Statistics
-    pub total_transfers: u64,
-    pub total_holders: u64,
-    pub total_burned: Amount,
+    pub total_transfers: RegisterView<u64>,
+    pub total_holders: RegisterView<u64>,
+    pub total_burned: RegisterView<Amount>,
 
     /// Timestamps
-    pub created_at: Timestamp,
-    pub last_activity: Timestamp,
+    pub created_at: RegisterView<Timestamp>,
+    pub last_activity: RegisterView<Timestamp>,
+
+    /// Phantom data to use type parameter
+    #[view(skip)]
+    _phantom: PhantomData<C>,
 }
 
-impl BattleTokenState {
-    /// Initialize new token with initial supply
-    pub fn new(initial_owner: Owner, initial_supply: Amount, created_at: Timestamp) -> Self {
-        Self {
-            name: "BattleChain Token".to_string(),
-            symbol: "BATTLE".to_string(),
-            decimals: 6,
-            total_supply: initial_supply,
-            balances: MapView::default(),
-            allowances: MapView::default(),
-            accounts: vec![initial_owner],
-            total_transfers: 0,
-            total_holders: 1,
-            total_burned: Amount::ZERO,
-            created_at,
-            last_activity: created_at,
-        }
-    }
-
+impl<C> BattleTokenState<C> {
     /// Get balance of account
     pub async fn balance_of(&self, account: &Owner) -> Amount {
         self.balances
             .get(account)
             .await
-            .unwrap_or(Ok(Amount::ZERO))
+            .unwrap_or(None)
             .unwrap_or(Amount::ZERO)
     }
 
@@ -154,7 +142,7 @@ impl BattleTokenState {
         self.allowances
             .get(&(*owner, *spender))
             .await
-            .unwrap_or(Ok(Amount::ZERO))
+            .unwrap_or(None)
             .unwrap_or(Amount::ZERO)
     }
 
@@ -335,7 +323,7 @@ impl From<linera_sdk::views::ViewError> for TokenError {
 
 /// Token Contract
 pub struct BattleTokenContract {
-    state: BattleTokenState,
+    state: BattleTokenState<ViewStorageContext>,
     runtime: ContractRuntime<Self>,
 }
 
@@ -370,19 +358,20 @@ impl Contract for BattleTokenContract {
             .clone();
         let now = self.runtime.system_time();
 
-        // Initialize state with initial supply minted to creator
-        self.state = BattleTokenState::new(creator, initial_supply, now);
+        // Initialize token metadata
+        self.state.name = "BattleChain Token".to_string();
+        self.state.symbol = "BATTLE".to_string();
+        self.state.decimals = 6;
+        self.state.total_supply = initial_supply;
+        self.state.total_transfers = 0;
+        self.state.total_holders = 1;
+        self.state.total_burned = Amount::ZERO;
+        self.state.created_at = now;
+        self.state.last_activity = now;
 
         // Mint initial supply to creator
-        self.state
-            .balances
-            .insert(&creator, initial_supply)
-            .expect("Failed to set initial balance");
-
-        self.runtime.emit(format!(
-            "BATTLE Token initialized: {} tokens minted to {}",
-            initial_supply, creator
-        ));
+        self.state.balances.insert(&creator, initial_supply).expect("Failed to set initial balance");
+        self.state.accounts.push(creator);
     }
 
     async fn execute_operation(&mut self, operation: Operation) -> Self::Response {
@@ -396,13 +385,8 @@ impl Contract for BattleTokenContract {
             Operation::Transfer { to, amount } => {
                 match self.state.transfer(caller, to, amount, now).await {
                     Ok(_) => {
-                        self.runtime.emit(format!(
-                            "Transfer: {} -> {} | Amount: {}",
-                            caller, to, amount
-                        ));
                     }
-                    Err(e) => {
-                        self.runtime.emit(format!("Transfer failed: {}", e));
+                    Err(_e) => {
                     }
                 }
             }
@@ -410,13 +394,8 @@ impl Contract for BattleTokenContract {
             Operation::Approve { spender, amount } => {
                 match self.state.approve(caller, spender, amount).await {
                     Ok(_) => {
-                        self.runtime.emit(format!(
-                            "Approval: {} approved {} to spend {}",
-                            caller, spender, amount
-                        ));
                     }
-                    Err(e) => {
-                        self.runtime.emit(format!("Approval failed: {}", e));
+                    Err(_e) => {
                     }
                 }
             }
@@ -424,13 +403,8 @@ impl Contract for BattleTokenContract {
             Operation::TransferFrom { from, to, amount } => {
                 match self.state.transfer_from(caller, from, to, amount, now).await {
                     Ok(_) => {
-                        self.runtime.emit(format!(
-                            "TransferFrom: {} moved {} from {} to {}",
-                            caller, amount, from, to
-                        ));
                     }
-                    Err(e) => {
-                        self.runtime.emit(format!("TransferFrom failed: {}", e));
+                    Err(_e) => {
                     }
                 }
             }
@@ -438,13 +412,8 @@ impl Contract for BattleTokenContract {
             Operation::Burn { amount } => {
                 match self.state.burn(caller, amount, now).await {
                     Ok(_) => {
-                        self.runtime.emit(format!(
-                            "Burn: {} burned {} BATTLE | Total burned: {}",
-                            caller, amount, self.state.total_burned
-                        ));
                     }
-                    Err(e) => {
-                        self.runtime.emit(format!("Burn failed: {}", e));
+                    Err(_e) => {
                     }
                 }
             }
@@ -454,13 +423,8 @@ impl Contract for BattleTokenContract {
                 // For now, only allow minting during initialization or by specific authority
                 match self.state.mint(to, amount, now).await {
                     Ok(_) => {
-                        self.runtime.emit(format!(
-                            "Mint: {} minted to {} | Total supply: {}",
-                            amount, to, self.state.total_supply
-                        ));
                     }
-                    Err(e) => {
-                        self.runtime.emit(format!("Mint failed: {}", e));
+                    Err(_e) => {
                     }
                 }
             }
@@ -470,10 +434,8 @@ impl Contract for BattleTokenContract {
                 // TODO: Implement claim logic with verification
                 match self.state.mint(caller, amount, now).await {
                     Ok(_) => {
-                        self.runtime.emit(format!("Claimed: {} received {}", caller, amount));
                     }
-                    Err(e) => {
-                        self.runtime.emit(format!("Claim failed: {}", e));
+                    Err(_e) => {
                     }
                 }
             }
@@ -488,24 +450,18 @@ impl Contract for BattleTokenContract {
                 from,
                 to,
                 amount,
-                target_chain,
+                target_chain: _,
             } => {
                 // Deduct from sender on this chain
                 match self.state.balance_of(&from).await {
                     balance if balance >= amount => {
                         if let Ok(_) = self.state.transfer(from, to, amount, now).await {
-                            self.runtime.emit(format!(
-                                "Cross-chain transfer: {} -> {} ({}) | Amount: {}",
-                                from, to, target_chain, amount
-                            ));
-
                             // TODO: Send credit message to target chain
                             // self.runtime.send_message(target_chain, Message::Credit { recipient: to, amount });
                         }
                     }
                     _ => {
-                        self.runtime
-                            .emit(format!("Cross-chain transfer failed: insufficient balance"));
+                        // Insufficient balance
                     }
                 }
             }
@@ -513,20 +469,12 @@ impl Contract for BattleTokenContract {
             Message::Credit { recipient, amount } => {
                 // Credit tokens received from another chain
                 if let Ok(_) = self.state.mint(recipient, amount, now).await {
-                    self.runtime.emit(format!(
-                        "Cross-chain credit: {} received {}",
-                        recipient, amount
-                    ));
                 }
             }
 
             Message::Debit { sender, amount } => {
                 // Confirmation of tokens sent to another chain
                 if let Ok(_) = self.state.burn(sender, amount, now).await {
-                    self.runtime.emit(format!(
-                        "Cross-chain debit: {} debited {}",
-                        sender, amount
-                    ));
                 }
             }
         }
@@ -539,14 +487,15 @@ impl Contract for BattleTokenContract {
 
 /// Token Service (GraphQL queries)
 pub struct BattleTokenService {
-    state: BattleTokenState,
+    state: BattleTokenState<ViewStorageContext>,
 }
 
 impl WithServiceAbi for BattleTokenService {
     type Abi = BattleTokenAbi;
 }
 
-linera_sdk::service!(BattleTokenService);
+// TODO: Re-enable after fixing Contract compilation
+// linera_sdk::service!(BattleTokenService);
 
 impl Service for BattleTokenService {
     type Parameters = ();
@@ -561,7 +510,7 @@ impl Service for BattleTokenService {
 
     async fn handle_query(&self, request: Request) -> Response {
         let schema = Schema::build(
-            QueryRoot::new(&self.state),
+            QueryRoot::new(&self.state).await,
             EmptyMutation,
             EmptySubscription,
         )
@@ -572,79 +521,94 @@ impl Service for BattleTokenService {
 }
 
 /// GraphQL Query Root
-struct QueryRoot<'a> {
-    state: &'a BattleTokenState,
+#[derive(Clone)]
+struct QueryRoot {
+    name: String,
+    symbol: String,
+    decimals: u8,
+    total_supply: Amount,
+    total_burned: Amount,
+    total_holders: u64,
+    total_transfers: u64,
 }
 
-impl<'a> QueryRoot<'a> {
-    fn new(state: &'a BattleTokenState) -> Self {
-        Self { state }
+impl QueryRoot {
+    async fn new(state: &BattleTokenState<ViewStorageContext>) -> Self {
+        Self {
+            name: state.name.get().clone(),
+            symbol: state.symbol.get().clone(),
+            decimals: *state.decimals.get(),
+            total_supply: *state.total_supply.get(),
+            total_burned: *state.total_burned.get(),
+            total_holders: *state.total_holders.get(),
+            total_transfers: *state.total_transfers.get(),
+        }
     }
 }
 
 #[async_graphql::Object]
-impl<'a> QueryRoot<'a> {
+impl QueryRoot {
     /// Token name
     async fn name(&self) -> String {
-        self.state.name.clone()
+        self.name.clone()
     }
 
     /// Token symbol
     async fn symbol(&self) -> String {
-        self.state.symbol.clone()
+        self.symbol.clone()
     }
 
     /// Token decimals
     async fn decimals(&self) -> u8 {
-        self.state.decimals
+        self.decimals
     }
 
     /// Total supply
     async fn total_supply(&self) -> String {
-        self.state.total_supply.to_string()
+        self.total_supply.to_string()
     }
 
     /// Total burned
     async fn total_burned(&self) -> String {
-        self.state.total_burned.to_string()
+        self.total_burned.to_string()
     }
 
     /// Circulating supply (total - burned)
     async fn circulating_supply(&self) -> String {
-        self.state.total_supply.saturating_sub(self.state.total_burned).to_string()
+        self.total_supply.saturating_sub(self.total_burned).to_string()
     }
 
     /// Get balance of account
-    async fn balance_of(&self, account: String) -> String {
+    async fn balance_of(&self, _account: String) -> String {
         // For now, return zero - need proper Owner parsing
         // TODO: Parse Owner from string and query balance
         "0".to_string()
     }
 
     /// Get allowance
-    async fn allowance(&self, owner: String, spender: String) -> String {
+    async fn allowance(&self, _owner: String, _spender: String) -> String {
         // TODO: Parse Owner from strings and query allowance
         "0".to_string()
     }
 
     /// Total number of token holders
     async fn total_holders(&self) -> u64 {
-        self.state.total_holders
+        self.total_holders
     }
 
     /// Total number of transfers
     async fn total_transfers(&self) -> u64 {
-        self.state.total_transfers
+        self.total_transfers
     }
 
     /// Token statistics
     async fn stats(&self) -> TokenStats {
         TokenStats {
-            total_supply: self.state.total_supply.to_string(),
-            total_burned: self.state.total_burned.to_string(),
-            circulating_supply: self.state.total_supply.saturating_sub(self.state.total_burned).to_string(),
-            total_holders: self.state.total_holders,
-            total_transfers: self.state.total_transfers,
+            total_supply: self.total_supply.to_string(),
+            total_burned: self.total_burned.to_string(),
+            circulating_supply: self.total_supply.saturating_sub(self.total_burned).to_string(),
+            total_holders: self.total_holders,
+            total_transfers: self.total_transfers,
         }
     }
 }
