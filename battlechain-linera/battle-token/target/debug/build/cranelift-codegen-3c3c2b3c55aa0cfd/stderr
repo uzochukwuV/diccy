@@ -1,0 +1,20 @@
+Writing generated file: /home/user/diccy/battlechain-linera/battle-token/target/debug/build/cranelift-codegen-3c3c2b3c55aa0cfd/out/settings.rs
+Writing generated file: /home/user/diccy/battlechain-linera/battle-token/target/debug/build/cranelift-codegen-3c3c2b3c55aa0cfd/out/types.rs
+Writing generated file: /home/user/diccy/battlechain-linera/battle-token/target/debug/build/cranelift-codegen-3c3c2b3c55aa0cfd/out/opcodes.rs
+Writing generated file: /home/user/diccy/battlechain-linera/battle-token/target/debug/build/cranelift-codegen-3c3c2b3c55aa0cfd/out/inst_builder.rs
+Writing generated file: /home/user/diccy/battlechain-linera/battle-token/target/debug/build/cranelift-codegen-3c3c2b3c55aa0cfd/out/settings-x86.rs
+Writing generated file: /home/user/diccy/battlechain-linera/battle-token/target/debug/build/cranelift-codegen-3c3c2b3c55aa0cfd/out/clif_opt.isle
+Writing generated file: /home/user/diccy/battlechain-linera/battle-token/target/debug/build/cranelift-codegen-3c3c2b3c55aa0cfd/out/clif_lower.isle
+Rebuilding /home/user/diccy/battlechain-linera/battle-token/target/debug/build/cranelift-codegen-3c3c2b3c55aa0cfd/out/isle_opt.rs
+Writing ISLE-generated Rust code to /home/user/diccy/battlechain-linera/battle-token/target/debug/build/cranelift-codegen-3c3c2b3c55aa0cfd/out/isle_opt.rs
+Rebuilding /home/user/diccy/battlechain-linera/battle-token/target/debug/build/cranelift-codegen-3c3c2b3c55aa0cfd/out/isle_x64.rs
+Writing ISLE-generated Rust code to /home/user/diccy/battlechain-linera/battle-token/target/debug/build/cranelift-codegen-3c3c2b3c55aa0cfd/out/isle_x64.rs
+Rebuilding /home/user/diccy/battlechain-linera/battle-token/target/debug/build/cranelift-codegen-3c3c2b3c55aa0cfd/out/isle_aarch64.rs
+Writing ISLE-generated Rust code to /home/user/diccy/battlechain-linera/battle-token/target/debug/build/cranelift-codegen-3c3c2b3c55aa0cfd/out/isle_aarch64.rs
+Rebuilding /home/user/diccy/battlechain-linera/battle-token/target/debug/build/cranelift-codegen-3c3c2b3c55aa0cfd/out/isle_s390x.rs
+Writing ISLE-generated Rust code to /home/user/diccy/battlechain-linera/battle-token/target/debug/build/cranelift-codegen-3c3c2b3c55aa0cfd/out/isle_s390x.rs
+Rebuilding /home/user/diccy/battlechain-linera/battle-token/target/debug/build/cranelift-codegen-3c3c2b3c55aa0cfd/out/isle_riscv64.rs
+Writing ISLE-generated Rust code to /home/user/diccy/battlechain-linera/battle-token/target/debug/build/cranelift-codegen-3c3c2b3c55aa0cfd/out/isle_riscv64.rs
+Rebuilding /home/user/diccy/battlechain-linera/battle-token/target/debug/build/cranelift-codegen-3c3c2b3c55aa0cfd/out/isle_pulley_shared.rs
+Writing ISLE-generated Rust code to /home/user/diccy/battlechain-linera/battle-token/target/debug/build/cranelift-codegen-3c3c2b3c55aa0cfd/out/isle_pulley_shared.rs
+fatal: not a git repository (or any of the parent directories): .git

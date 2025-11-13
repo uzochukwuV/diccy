@@ -1,5 +1,0 @@
-/home/user/diccy/battlechain-linera/battle-token/target/debug/deps/libsync_wrapper-bc1cb564d0b79075.rmeta: /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sync_wrapper-1.0.2/src/lib.rs
-
-/home/user/diccy/battlechain-linera/battle-token/target/debug/deps/sync_wrapper-bc1cb564d0b79075.d: /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sync_wrapper-1.0.2/src/lib.rs
-
-/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sync_wrapper-1.0.2/src/lib.rs:

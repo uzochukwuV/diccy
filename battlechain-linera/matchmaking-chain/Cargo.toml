@@ -5,12 +5,12 @@ edition = "2021"
 
 [dependencies]
 async-trait = "0.1"
-linera-sdk = "0.13.0"
+linera-sdk = { git = "https://github.com/linera-io/linera-protocol.git", tag = "v0.13.0", features = ["wasmer"] }
 serde = { version = "1.0", features = ["derive"] }
 thiserror = "2.0"
 
 # Local dependencies
-shared-types = { path = "../shared-types" }
+shared-types = { path = "../shared-types", package = "battlechain-shared-types" }
 
 [lib]
 crate-type = ["cdylib", "rlib"]
