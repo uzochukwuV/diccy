@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use linera_sdk::{
-    linera_base_types::{Amount, ApplicationId, ChainId, Timestamp},
+    base::{Amount, ApplicationId, ChainId, Timestamp},
     views::{RootView, ViewStorageContext},
     Contract, ContractRuntime, Service, ServiceRuntime,
 };
