@@ -1,18 +1,27 @@
 use async_graphql::{Request, Response, Schema, EmptySubscription, SimpleObject};
 use linera_sdk::{
-    base::{Amount, ApplicationId, ChainId, Owner, Timestamp, WithContractAbi},
-    views::{MapView, RootView, View, ViewStorageContext},
+    abi::{ContractAbi, ServiceAbi, WithContractAbi, WithServiceAbi},
+    linera_base_types::{AccountOwner, Amount, ApplicationId, ChainId, Timestamp},
+    views::{MapView, RootView, ViewStorageContext},
     Contract, Service, ContractRuntime, ServiceRuntime,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+// Type alias for consistency
+type Owner = AccountOwner;
+
 /// BATTLE Token Application ABI
 pub struct BattleTokenAbi;
 
-impl WithContractAbi for BattleTokenAbi {
+impl ContractAbi for BattleTokenAbi {
     type Operation = Operation;
     type Response = ();
+}
+
+impl ServiceAbi for BattleTokenAbi {
+    type Query = Request;
+    type QueryResponse = Response;
 }
 
 /// Token State - manages all BATTLE token balances and operations
@@ -99,15 +108,15 @@ impl BattleTokenState {
 
         // Deduct from sender
         let new_from_balance = from_balance
-            .checked_sub(amount)
-            .ok_or(TokenError::MathOverflow)?;
+            .try_sub(amount)
+            .map_err(|_| TokenError::MathOverflow)?;
         self.balances.insert(&from, new_from_balance).await?;
 
         // Add to recipient
         let to_balance = self.balance_of(&to).await;
         let new_to_balance = to_balance
-            .checked_add(amount)
-            .ok_or(TokenError::MathOverflow)?;
+            .try_add(amount)
+            .map_err(|_| TokenError::MathOverflow)?;
         self.balances.insert(&to, new_to_balance).await?;
 
         // Track new holder
@@ -169,8 +178,8 @@ impl BattleTokenState {
 
         // Reduce allowance
         let new_allowance = allowed
-            .checked_sub(amount)
-            .ok_or(TokenError::MathOverflow)?;
+            .try_sub(amount)
+            .map_err(|_| TokenError::MathOverflow)?;
         self.allowances
             .insert(&(from, spender), new_allowance)
             .await?;
@@ -194,19 +203,19 @@ impl BattleTokenState {
         }
 
         // Remove from account
-        let new_balance = balance.checked_sub(amount).ok_or(TokenError::MathOverflow)?;
+        let new_balance = balance.try_sub(amount).map_err(|_| TokenError::MathOverflow)?;
         self.balances.insert(&from, new_balance).await?;
 
         // Reduce total supply
         self.total_supply = self
             .total_supply
-            .checked_sub(amount)
-            .ok_or(TokenError::MathOverflow)?;
+            .try_sub(amount)
+            .map_err(|_| TokenError::MathOverflow)?;
 
         self.total_burned = self
             .total_burned
-            .checked_add(amount)
-            .ok_or(TokenError::MathOverflow)?;
+            .try_add(amount)
+            .map_err(|_| TokenError::MathOverflow)?;
 
         self.last_activity = now;
 
@@ -221,14 +230,14 @@ impl BattleTokenState {
 
         // Add to recipient
         let balance = self.balance_of(&to).await;
-        let new_balance = balance.checked_add(amount).ok_or(TokenError::MathOverflow)?;
+        let new_balance = balance.try_add(amount).map_err(|_| TokenError::MathOverflow)?;
         self.balances.insert(&to, new_balance).await?;
 
         // Increase total supply
         self.total_supply = self
             .total_supply
-            .checked_add(amount)
-            .ok_or(TokenError::MathOverflow)?;
+            .try_add(amount)
+            .map_err(|_| TokenError::MathOverflow)?;
 
         // Track new holder
         if balance == Amount::ZERO {
@@ -331,10 +340,17 @@ pub struct BattleTokenContract {
     runtime: ContractRuntime<Self>,
 }
 
+linera_sdk::contract!(BattleTokenContract);
+
+impl WithContractAbi for BattleTokenContract {
+    type Abi = BattleTokenAbi;
+}
+
 impl Contract for BattleTokenContract {
     type Message = Message;
     type Parameters = Amount; // Initial supply
     type InstantiationArgument = ();
+    type EventValue = ();
 
     async fn load(runtime: ContractRuntime<Self>) -> Self {
         let state = BattleTokenState::load(runtime.root_view_storage_context())
@@ -346,11 +362,16 @@ impl Contract for BattleTokenContract {
 
     async fn instantiate(&mut self, _argument: ()) {
         let initial_supply = self.runtime.parameters();
-        let creator = self
+        let chain_ownership = self
             .runtime
-            .chain_ownership()
-            .owner
-            .expect("Chain must have owner");
+            .initial_chain_ownership()
+            .expect("Failed to query initial chain ownership");
+        let creator = chain_ownership
+            .super_owners
+            .keys()
+            .next()
+            .expect("No super owners found")
+            .clone();
         let now = self.runtime.system_time();
 
         // Initialize state with initial supply minted to creator
@@ -526,10 +547,16 @@ pub struct BattleTokenService {
     state: BattleTokenState,
 }
 
+impl WithServiceAbi for BattleTokenService {
+    type Abi = BattleTokenAbi;
+}
+
+linera_sdk::service!(BattleTokenService);
+
 impl Service for BattleTokenService {
     type Parameters = ();
 
-    async fn load(runtime: ServiceRuntime<Self>) -> Self {
+    async fn new(runtime: ServiceRuntime<Self>) -> Self {
         let state = BattleTokenState::load(runtime.root_view_storage_context())
             .await
             .expect("Failed to load state");
@@ -589,7 +616,7 @@ impl<'a> QueryRoot<'a> {
 
     /// Circulating supply (total - burned)
     async fn circulating_supply(&self) -> String {
-        (self.state.total_supply - self.state.total_burned).to_string()
+        self.state.total_supply.saturating_sub(self.state.total_burned).to_string()
     }
 
     /// Get balance of account
@@ -620,7 +647,7 @@ impl<'a> QueryRoot<'a> {
         TokenStats {
             total_supply: self.state.total_supply.to_string(),
             total_burned: self.state.total_burned.to_string(),
-            circulating_supply: (self.state.total_supply - self.state.total_burned).to_string(),
+            circulating_supply: self.state.total_supply.saturating_sub(self.state.total_burned).to_string(),
             total_holders: self.state.total_holders,
             total_transfers: self.state.total_transfers,
         }
@@ -644,6 +671,3 @@ impl EmptyMutation {
         false
     }
 }
-
-linera_sdk::contract!(BattleTokenContract);
-linera_sdk::service!(BattleTokenService);

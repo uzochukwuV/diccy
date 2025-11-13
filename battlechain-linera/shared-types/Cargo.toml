@@ -7,7 +7,7 @@ edition = "2021"
 serde = { version = "1.0", features = ["derive"] }
 linera-sdk = { git = "https://github.com/linera-io/linera-protocol.git", tag = "v0.15.5", features = ["wasmer"] }
 thiserror = "1.0"
-async-graphql = "=7.0.2"
+async-graphql = "=7.0.17"
 
 [lib]
 crate-type = ["cdylib", "rlib"]

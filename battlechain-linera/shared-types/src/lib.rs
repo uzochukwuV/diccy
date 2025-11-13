@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
-use linera_sdk::base::{Amount, ChainId, Owner, Timestamp};
+use linera_sdk::linera_base_types::{AccountOwner, Amount, ChainId, Timestamp};
+
+// Type alias for compatibility
+pub type Owner = AccountOwner;
 
 /// Character classes with unique abilities and stats
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
