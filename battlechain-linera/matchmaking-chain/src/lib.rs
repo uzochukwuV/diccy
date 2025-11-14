@@ -2,11 +2,14 @@ use async_graphql::{Request, Response, Schema, EmptyMutation, EmptySubscription,
 use battlechain_shared_types::{CharacterSnapshot, Owner};
 use linera_sdk::{
     abi::{ContractAbi, ServiceAbi, WithContractAbi, WithServiceAbi},
-    linera_base_types::{Amount, ApplicationId, ChainId, Timestamp},
+    linera_base_types::{
+        Amount, ApplicationId, ApplicationPermissions, ChainId, ChainOwnership, Timestamp,
+    },
     views::{MapView, RegisterView, RootView, View, ViewStorageContext},
     Contract, Service, ContractRuntime, ServiceRuntime,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use thiserror::Error;
 
 /// Matchmaking Chain Application ABI
@@ -225,24 +228,46 @@ impl WithContractAbi for MatchmakingContract {
 impl MatchmakingContract {
     /// Create a new battle chain with multi-owner ownership
     async fn create_battle_chain(&mut self, pending: PendingBattle) {
-        // TODO: Implement multi-owner battle chain creation
-        // The open_chain API in Linera SDK v0.15.5 needs to be researched
-        // for proper multi-owner chain creation with ApplicationPermissions
-
-        // For now, we'll use a placeholder battle chain ID
-        // In production, this needs to:
-        // 1. Create ChainOwnership with both players as owners
-        // 2. Call runtime.open_chain() with proper ApplicationPermissions
-        // 3. Initialize the battle chain with both player characters and stakes
-
         let battle_app_id = self.state.battle_app_id.get()
+            .clone()
             .expect("Battle app ID not configured");
 
-        // Placeholder: In real implementation, this would be the newly created chain
-        let battle_chain_id = self.runtime.chain_id(); // Temporary placeholder
+        // Create multi-owner chain ownership with both players
+        // Each player gets equal weight (100)
+        let mut owners = BTreeMap::new();
+        owners.insert(pending.player1.player_owner, 100);
+        owners.insert(pending.player2.player_owner, 100);
+
+        let chain_ownership = ChainOwnership {
+            super_owners: Default::default(), // No super owners for battle chains
+            owners,
+            multi_leader_rounds: 10, // Allow 10 rounds of multi-leader consensus
+            open_multi_leader_rounds: false, // Only the two players can propose
+            timeout_config: Default::default(), // Use default timeouts
+        };
+
+        // Configure application permissions
+        // Only allow the battle application to execute operations
+        let application_permissions = ApplicationPermissions {
+            execute_operations: Some(vec![battle_app_id]),
+            mandatory_applications: vec![],
+            close_chain: vec![battle_app_id], // Battle app can close chain when battle ends
+            change_application_permissions: vec![],
+            call_service_as_oracle: None, // No oracle calls needed
+            make_http_requests: None, // No HTTP requests needed
+        };
+
+        // Calculate total stake to fund the new chain
+        let total_stake = pending.player1.stake.saturating_add(pending.player2.stake);
+
+        // Create the battle chain!
+        let battle_chain_id = self.runtime.open_chain(
+            chain_ownership,
+            application_permissions,
+            total_stake, // Initial balance for the battle chain
+        );
 
         // Store battle metadata
-        let total_stake = pending.player1.stake.saturating_add(pending.player2.stake);
         let metadata = BattleMetadata {
             player1: pending.player1.player_chain,
             player2: pending.player2.player_chain,
