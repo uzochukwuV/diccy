@@ -1,6 +1,6 @@
 use async_graphql::{Request, Response, Schema, EmptyMutation, EmptySubscription, SimpleObject};
 use battlechain_shared_types::{
-    derive_random_u64, mul_fp, random_in_range, CharacterSnapshot, EntropySeed,
+    derive_random_u64, mul_fp, random_in_range, CharacterSnapshot,
     FP_SCALE, MAX_COMBO_STACK, Owner, Stance,
 };
 use linera_sdk::{
@@ -164,9 +164,8 @@ pub struct BattleState {
     /// Round results history
     pub round_results: RegisterView<Vec<RoundResult>>,
 
-    /// Entropy for randomness
-    pub entropy_seed: RegisterView<Option<EntropySeed>>,
-    pub entropy_index: RegisterView<u64>,
+    /// Randomness counter for generating unique seeds per action
+    pub random_counter: RegisterView<u64>,
 
     /// Application references
     pub battle_token_app: RegisterView<Option<ApplicationId>>,
@@ -182,14 +181,32 @@ pub struct BattleState {
 }
 
 impl BattleState {
-    /// Get next entropy value
-    pub fn next_random(&mut self) -> Result<u64, BattleError> {
-        let entropy = self.entropy_seed.get()
-            .as_ref()
-            .ok_or(BattleError::EntropyNotInitialized)?;
-        let value = derive_random_u64(&entropy.seed, (*self.entropy_index.get() % 256) as u8);
-        self.entropy_index.set(*self.entropy_index.get() + 1);
-        Ok(value)
+    /// Generate random seed from timestamp and counter
+    pub fn generate_random_seed(&mut self, timestamp: Timestamp) -> [u8; 32] {
+        let counter = *self.random_counter.get();
+        self.random_counter.set(counter + 1);
+
+        // Combine timestamp and counter for unique seed
+        let time_micros = timestamp.micros();
+        let mut seed = [0u8; 32];
+
+        // Fill seed with timestamp and counter bytes
+        seed[0..8].copy_from_slice(&time_micros.to_le_bytes());
+        seed[8..16].copy_from_slice(&counter.to_le_bytes());
+
+        // Fill rest with combination of both for extra entropy
+        let combined = time_micros.wrapping_add(counter);
+        seed[16..24].copy_from_slice(&combined.to_le_bytes());
+        seed[24..32].copy_from_slice(&(time_micros ^ counter).to_le_bytes());
+
+        seed
+    }
+
+    /// Get next random value
+    pub fn next_random(&mut self, timestamp: Timestamp) -> u64 {
+        let seed = self.generate_random_seed(timestamp);
+        let tag = (*self.random_counter.get() % 256) as u8;
+        derive_random_u64(&seed, tag)
     }
 
     /// Get participant by owner (returns cloned participant)
@@ -214,21 +231,18 @@ impl BattleState {
         attacker_stance: Stance,
         defender_stance: Stance,
         special_used: bool,
+        timestamp: Timestamp,
     ) -> Result<(u32, bool, bool), BattleError> {
         let char = &attacker.character;
 
-        let entropy = self.entropy_seed.get()
-            .as_ref()
-            .ok_or(BattleError::EntropyNotInitialized)?;
-
         // Base damage (random in range)
+        let seed = self.generate_random_seed(timestamp);
         let base_damage = random_in_range(
-            &entropy.seed,
-            (*self.entropy_index.get() % 256) as u8,
+            &seed,
+            0,
             char.min_damage as u64,
             char.max_damage as u64,
         ) as u32;
-        self.entropy_index.set(*self.entropy_index.get() + 1);
 
         let mut damage = base_damage as u128 * FP_SCALE;
 
@@ -254,7 +268,7 @@ impl BattleState {
         }
 
         // Check for critical hit
-        let crit_roll = self.next_random()? % 10000;
+        let crit_roll = self.next_random(timestamp) % 10000;
         let crit_chance = char.crit_chance + char.crit_bps.max(0) as u16;
         let mut was_crit = false;
 
@@ -270,7 +284,7 @@ impl BattleState {
         }
 
         // Check for dodge
-        let dodge_roll = self.next_random()? % 10000;
+        let dodge_roll = self.next_random(timestamp) % 10000;
         let was_dodged = dodge_roll < defender.character.dodge_chance as u64;
 
         if was_dodged {
@@ -317,6 +331,7 @@ impl BattleState {
         defender: &mut BattleParticipant,
         attacker_turn: &TurnSubmission,
         defender_stance: Stance,
+        timestamp: Timestamp,
     ) -> Result<CombatAction, BattleError> {
         let attacker_owner = attacker.owner;
         let defender_owner = defender.owner;
@@ -335,6 +350,7 @@ impl BattleState {
             attacker_turn.stance,
             defender_stance,
             special_used,
+            timestamp,
         )?;
 
         let mut was_countered = false;
@@ -361,7 +377,7 @@ impl BattleState {
 
         // Counter-attack for Counter stance
         if defender_stance == Stance::Counter && !was_dodged && !defeated {
-            let counter_roll = self.next_random()? % 10000;
+            let counter_roll = self.next_random(timestamp) % 10000;
             if counter_roll < 4000 {
                 // 40% counter chance
                 was_countered = true;
@@ -387,7 +403,7 @@ impl BattleState {
     }
 
     /// Execute full round (all 3 turns for both players)
-    pub fn execute_full_round(&mut self) -> Result<RoundResult, BattleError> {
+    pub fn execute_full_round(&mut self, timestamp: Timestamp) -> Result<RoundResult, BattleError> {
         let mut p1 = self.player1.get().clone().ok_or(BattleError::NotInitialized)?;
         let mut p2 = self.player2.get().clone().ok_or(BattleError::NotInitialized)?;
 
@@ -403,13 +419,13 @@ impl BattleState {
 
             // Player 1 attacks
             if p1.current_hp > 0 && p2.current_hp > 0 {
-                let action = self.execute_turn(&mut p1, &mut p2, &p1_turn, p2_stance)?;
+                let action = self.execute_turn(&mut p1, &mut p2, &p1_turn, p2_stance, timestamp)?;
                 player1_actions.push(action);
             }
 
             // Player 2 attacks
             if p2.current_hp > 0 && p1.current_hp > 0 {
-                let action = self.execute_turn(&mut p2, &mut p1, &p2_turn, p1_stance)?;
+                let action = self.execute_turn(&mut p2, &mut p1, &p2_turn, p1_stance, timestamp)?;
                 player2_actions.push(action);
             }
 
@@ -518,9 +534,6 @@ pub enum BattleError {
     #[error("Player defeated")]
     PlayerDefeated,
 
-    #[error("Entropy not initialized")]
-    EntropyNotInitialized,
-
     #[error("View error: {0}")]
     ViewError(String),
 }
@@ -546,7 +559,7 @@ impl WithContractAbi for BattleContract {
 impl Contract for BattleContract {
     type Message = Message;
     type Parameters = BattleParameters;
-    type InstantiationArgument = [u8; 32]; // Entropy seed
+    type InstantiationArgument = (); // No arguments needed
     type EventValue = ();
 
     async fn load(runtime: ContractRuntime<Self>) -> Self {
@@ -557,7 +570,7 @@ impl Contract for BattleContract {
         Self { state, runtime }
     }
 
-    async fn instantiate(&mut self, entropy_seed: [u8; 32]) {
+    async fn instantiate(&mut self, _argument: ()) {
         let params = self.runtime.application_parameters();
         let now = self.runtime.system_time();
 
@@ -583,13 +596,8 @@ impl Contract for BattleContract {
         self.state.winner.set(None);
         self.state.round_results.set(Vec::new());
 
-        // Initialize entropy
-        self.state.entropy_seed.set(Some(EntropySeed {
-            seed: entropy_seed,
-            index: 0,
-            timestamp: now,
-        }));
-        self.state.entropy_index.set(0);
+        // Initialize randomness counter
+        self.state.random_counter.set(0);
 
         // Initialize references
         self.state.battle_token_app.set(Some(params.battle_token_app));
@@ -680,7 +688,8 @@ impl Contract for BattleContract {
                     }
 
                     // Execute the round
-                    if let Ok(round_result) = self.state.execute_full_round() {
+                    let now = self.runtime.system_time();
+                    if let Ok(round_result) = self.state.execute_full_round(now) {
                         let mut results = self.state.round_results.get().clone();
                         results.push(round_result.clone());
                         self.state.round_results.set(results);

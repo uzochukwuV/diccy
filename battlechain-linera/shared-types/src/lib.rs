@@ -267,14 +267,6 @@ pub struct LeaderboardEntry {
     pub total_earnings_battle: Amount, // Total BATTLE tokens earned
 }
 
-/// Entropy seed for randomness
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct EntropySeed {
-    pub seed: [u8; 32],
-    pub index: u64,
-    pub timestamp: Timestamp,
-}
-
 /// Fixed-point math constants
 pub const FP_SCALE: u128 = 1_000_000; // 1e6 for fixed-point arithmetic
 pub const MAX_COMBO_STACK: u8 = 5;
