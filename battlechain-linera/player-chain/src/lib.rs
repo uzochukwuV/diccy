@@ -138,11 +138,19 @@ pub enum Message {
         stake_required: Amount,
     },
 
-    /// Battle result notification
+    /// Battle result notification (from battle chain)
     BattleResult {
+        winner: Owner,
+        loser: Owner,
+        winner_payout: Amount,
+        rounds_played: u8,
+    },
+
+    /// Matchmaking request to lock stake
+    LockStakeRequest {
+        matchmaking_chain: ChainId,
         battle_chain: ChainId,
-        won: bool,
-        reward: Amount,
+        stake_amount: Amount,
     },
 }
 
@@ -274,19 +282,77 @@ impl Contract for PlayerChainContract {
         match message {
             Message::BattleInvite { battle_chain: _, stake_required: _ } => {
                 // Handle battle invite - could auto-join if auto_play enabled
+                // TODO: Implement auto-join logic based on player preferences
             }
 
-            Message::BattleResult { battle_chain, won, reward } => {
-                // Handle battle result
+            Message::BattleResult {
+                winner,
+                loser,
+                winner_payout,
+                rounds_played: _,
+            } => {
+                // Determine if this player won or lost
+                let player_owner = self.runtime.authenticated_signer();
+                let won = player_owner.map(|o| o == winner).unwrap_or(false);
+
+                // Find and unlock battle stake
+                // Note: We need to determine which battle chain this came from
+                // The message should be from the battle chain itself
+                let battle_chain = match self.runtime.message_origin_chain_id() {
+                    Some(chain) => chain,
+                    None => {
+                        // Fallback: try to find in active battles
+                        if let Some(chain) = self.state.active_battles.get().first().cloned() {
+                            chain
+                        } else {
+                            // No battle chain found - this shouldn't happen in normal operation
+                            return;
+                        }
+                    }
+                };
+
+                // Unlock stake
                 let _ = self.state.unlock_battle(&battle_chain).await;
+
+                // Record result
                 self.state.record_battle_result(won);
 
-                if won && reward > Amount::ZERO {
+                // Remove from active battles
+                let mut active = self.state.active_battles.get().clone();
+                active.retain(|c| c != &battle_chain);
+                self.state.active_battles.set(active);
+
+                // Add payout if won
+                if won && winner_payout > Amount::ZERO {
                     let new_balance = self.state.battle_balance.get()
-                        .try_add(reward)
+                        .try_add(winner_payout)
                         .unwrap_or(*self.state.battle_balance.get());
                     self.state.battle_balance.set(new_balance);
                 }
+
+                // Log battle completion
+                // Note: In production, you'd want to emit events or update more detailed stats
+            }
+
+            Message::LockStakeRequest {
+                matchmaking_chain: _,
+                battle_chain,
+                stake_amount,
+            } => {
+                // Lock stake for upcoming battle
+                if let Err(_e) = self.state.lock_battle(battle_chain, stake_amount) {
+                    // Failed to lock - could send rejection message back
+                    return;
+                }
+
+                // Add to active battles
+                let mut active = self.state.active_battles.get().clone();
+                if !active.contains(&battle_chain) {
+                    active.push(battle_chain);
+                    self.state.active_battles.set(active);
+                }
+
+                // TODO: Send confirmation message back to matchmaking chain
             }
         }
     }

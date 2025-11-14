@@ -5,7 +5,7 @@ use battlechain_shared_types::{
 };
 use linera_sdk::{
     abi::{ContractAbi, ServiceAbi, WithContractAbi, WithServiceAbi},
-    linera_base_types::{Amount, ApplicationId, ChainId, Timestamp},
+    linera_base_types::{Account, Amount, ApplicationId, ChainId, Timestamp},
     views::{RegisterView, RootView, View, ViewStorageContext},
     Contract, Service, ContractRuntime, ServiceRuntime,
 };
@@ -727,11 +727,56 @@ impl Contract for BattleContract {
                     return;
                 }
 
-                // TODO: Implement reward distribution
-                // - Calculate platform fee
-                // - Send winner payout
-                // - Notify player chains
-                // - Notify matchmaking chain
+                let p1 = self.state.player1.get().clone().unwrap();
+                let p2 = self.state.player2.get().clone().unwrap();
+                let winner_owner = self.state.winner.get().clone().unwrap();
+                let loser_owner = if winner_owner == p1.owner {
+                    p2.owner
+                } else {
+                    p1.owner
+                };
+
+                // Calculate payouts
+                let total_stake = p1.stake.saturating_add(p2.stake);
+                // For now, winner takes all (TODO: implement platform fee with proper Amount arithmetic)
+                let winner_payout = total_stake;
+
+                // TODO: Implement proper token accounting and transfers
+                // When implemented, this should:
+                // 1. Calculate platform fee: (total * platform_fee_bps) / 10000
+                // 2. Transfer platform_fee to treasury via BATTLE token app
+                // 3. Transfer winner_payout to winner via BATTLE token app
+
+                // Send battle result messages to both player chains
+                let result_message = Message::BattleResult {
+                    winner: winner_owner,
+                    loser: loser_owner,
+                    winner_payout,
+                    rounds_played: *self.state.current_round.get(),
+                };
+
+                self.runtime
+                    .prepare_message(result_message.clone())
+                    .with_authentication()
+                    .send_to(p1.chain);
+
+                self.runtime
+                    .prepare_message(result_message)
+                    .with_authentication()
+                    .send_to(p2.chain);
+
+                // Notify matchmaking chain of completion
+                if let Some(matchmaking_chain) = self.state.matchmaking_chain.get().as_ref() {
+                    let completion_message = Message::BattleCompleted {
+                        winner: winner_owner,
+                        loser: loser_owner,
+                    };
+
+                    self.runtime
+                        .prepare_message(completion_message)
+                        .with_authentication()
+                        .send_to(*matchmaking_chain);
+                }
             }
         }
     }

@@ -357,18 +357,35 @@ impl EntropyContract {
     /// Request entropy (called by other chains)
     async fn request_entropy(
         &mut self,
-        _requester_chain: ChainId,
-        _request_id: String,
+        requester_chain: ChainId,
+        request_id: String,
     ) -> Result<(), EntropyError> {
-        let _entropy_seed = self.consume_entropy().await?;
+        let entropy_seed = self.consume_entropy().await?;
 
-        // TODO: Implement cross-chain message sending
-        // self.runtime
-        //     .send_message(
-        //         requester_chain,
-        //         Message::EntropyResponse { request_id, seed: entropy_seed }
-        //     )
-        //     .await;
+        // Send entropy response back to requester
+        let message = Message::EntropyResponse {
+            request_id,
+            seed: entropy_seed,
+        };
+
+        self.runtime
+            .prepare_message(message)
+            .with_authentication()
+            .send_to(requester_chain);
+
+        // Check if refill needed and send alert to oracle chain if low
+        if self.needs_refill() {
+            let alert_message = Message::RefillNeeded {
+                remaining: *self.state.total_available.get(),
+                threshold: *self.state.refill_threshold.get(),
+            };
+
+            // Send alert to application creator chain (oracle's chain)
+            let oracle_chain = self.runtime.application_creator_chain_id();
+            self.runtime
+                .prepare_message(alert_message)
+                .send_to(oracle_chain);
+        }
 
         Ok(())
     }
