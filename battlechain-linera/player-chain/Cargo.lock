@@ -48,27 +48,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "allocative"
-version = "0.3.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8fac2ce611db8b8cee9b2aa886ca03c924e9da5e5295d0dbd0526e5d0b0710f7"
-dependencies = [
- "allocative_derive",
- "ctor",
-]
-
-[[package]]
-name = "allocative_derive"
-version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe233a377643e0fc1a56421d7c90acdec45c291b30345eb9f08e8d0ddce5a4ab"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.110",
-]
-
-[[package]]
 name = "allocator-api2"
 version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -761,16 +740,6 @@ checksum = "1bfb12502f3fc46cca1bb51ac28df9d618d813cdc3d2f25b9fe775a34af26bb3"
 dependencies = [
  "generic-array",
  "typenum",
-]
-
-[[package]]
-name = "ctor"
-version = "0.1.26"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d2301688392eb071b0bf1a37be05c469d3cc4dbbd95df672fe28ab021e6a096"
-dependencies = [
- "quote",
- "syn 1.0.109",
 ]
 
 [[package]]
@@ -1997,10 +1966,9 @@ checksum = "f9fbbcab51052fe104eb5e5d351cf728d30a5be1fe14d9be8a3b097481fb97de"
 
 [[package]]
 name = "linera-base"
-version = "0.16.0"
-source = "git+https://github.com/linera-io/linera-protocol.git#c073fbb656db91d91628dbfc64030d741a4f5a9d"
+version = "0.15.5"
+source = "git+https://github.com/linera-io/linera-protocol.git?tag=v0.15.5#1fcaeec37c10165bf4ce93cf03612520667ad4fd"
 dependencies = [
- "allocative",
  "alloy-primitives",
  "anyhow",
  "async-graphql",
@@ -2044,10 +2012,9 @@ dependencies = [
 
 [[package]]
 name = "linera-chain"
-version = "0.16.0"
-source = "git+https://github.com/linera-io/linera-protocol.git#c073fbb656db91d91628dbfc64030d741a4f5a9d"
+version = "0.15.5"
+source = "git+https://github.com/linera-io/linera-protocol.git?tag=v0.15.5#1fcaeec37c10165bf4ce93cf03612520667ad4fd"
 dependencies = [
- "allocative",
  "async-graphql",
  "cfg_aliases",
  "custom_debug_derive",
@@ -2068,8 +2035,8 @@ dependencies = [
 
 [[package]]
 name = "linera-core"
-version = "0.16.0"
-source = "git+https://github.com/linera-io/linera-protocol.git#c073fbb656db91d91628dbfc64030d741a4f5a9d"
+version = "0.15.5"
+source = "git+https://github.com/linera-io/linera-protocol.git?tag=v0.15.5#1fcaeec37c10165bf4ce93cf03612520667ad4fd"
 dependencies = [
  "async-graphql",
  "async-trait",
@@ -2103,10 +2070,9 @@ dependencies = [
 
 [[package]]
 name = "linera-execution"
-version = "0.16.0"
-source = "git+https://github.com/linera-io/linera-protocol.git#c073fbb656db91d91628dbfc64030d741a4f5a9d"
+version = "0.15.5"
+source = "git+https://github.com/linera-io/linera-protocol.git?tag=v0.15.5#1fcaeec37c10165bf4ce93cf03612520667ad4fd"
 dependencies = [
- "allocative",
  "anyhow",
  "async-graphql",
  "async-trait",
@@ -2147,8 +2113,8 @@ checksum = "c9198100e9ce61acd3c714a2e61eb19fc5b8e2178dd645e2d9061e61e6e1feef"
 
 [[package]]
 name = "linera-sdk"
-version = "0.16.0"
-source = "git+https://github.com/linera-io/linera-protocol.git#c073fbb656db91d91628dbfc64030d741a4f5a9d"
+version = "0.15.5"
+source = "git+https://github.com/linera-io/linera-protocol.git?tag=v0.15.5#1fcaeec37c10165bf4ce93cf03612520667ad4fd"
 dependencies = [
  "anyhow",
  "async-graphql",
@@ -2175,8 +2141,8 @@ dependencies = [
 
 [[package]]
 name = "linera-sdk-derive"
-version = "0.16.0"
-source = "git+https://github.com/linera-io/linera-protocol.git#c073fbb656db91d91628dbfc64030d741a4f5a9d"
+version = "0.15.5"
+source = "git+https://github.com/linera-io/linera-protocol.git?tag=v0.15.5#1fcaeec37c10165bf4ce93cf03612520667ad4fd"
 dependencies = [
  "convert_case",
  "proc-macro2",
@@ -2185,8 +2151,8 @@ dependencies = [
 
 [[package]]
 name = "linera-storage"
-version = "0.16.0"
-source = "git+https://github.com/linera-io/linera-protocol.git#c073fbb656db91d91628dbfc64030d741a4f5a9d"
+version = "0.15.5"
+source = "git+https://github.com/linera-io/linera-protocol.git?tag=v0.15.5#1fcaeec37c10165bf4ce93cf03612520667ad4fd"
 dependencies = [
  "async-trait",
  "bcs",
@@ -2201,13 +2167,14 @@ dependencies = [
  "papaya",
  "prometheus",
  "serde",
+ "tokio",
  "tracing",
 ]
 
 [[package]]
 name = "linera-version"
-version = "0.16.0"
-source = "git+https://github.com/linera-io/linera-protocol.git#c073fbb656db91d91628dbfc64030d741a4f5a9d"
+version = "0.15.5"
+source = "git+https://github.com/linera-io/linera-protocol.git?tag=v0.15.5#1fcaeec37c10165bf4ce93cf03612520667ad4fd"
 dependencies = [
  "anyhow",
  "async-graphql",
@@ -2227,10 +2194,9 @@ dependencies = [
 
 [[package]]
 name = "linera-views"
-version = "0.16.0"
-source = "git+https://github.com/linera-io/linera-protocol.git#c073fbb656db91d91628dbfc64030d741a4f5a9d"
+version = "0.15.5"
+source = "git+https://github.com/linera-io/linera-protocol.git?tag=v0.15.5#1fcaeec37c10165bf4ce93cf03612520667ad4fd"
 dependencies = [
- "allocative",
  "anyhow",
  "async-graphql",
  "async-lock",
@@ -2241,7 +2207,6 @@ dependencies = [
  "futures",
  "generic-array",
  "hex",
- "itertools",
  "linera-base",
  "linera-views-derive",
  "linera-witty",
@@ -2264,8 +2229,8 @@ dependencies = [
 
 [[package]]
 name = "linera-views-derive"
-version = "0.16.0"
-source = "git+https://github.com/linera-io/linera-protocol.git#c073fbb656db91d91628dbfc64030d741a4f5a9d"
+version = "0.15.5"
+source = "git+https://github.com/linera-io/linera-protocol.git?tag=v0.15.5#1fcaeec37c10165bf4ce93cf03612520667ad4fd"
 dependencies = [
  "cfg_aliases",
  "deluxe",
@@ -2413,8 +2378,8 @@ dependencies = [
 
 [[package]]
 name = "linera-witty"
-version = "0.16.0"
-source = "git+https://github.com/linera-io/linera-protocol.git#c073fbb656db91d91628dbfc64030d741a4f5a9d"
+version = "0.15.5"
+source = "git+https://github.com/linera-io/linera-protocol.git?tag=v0.15.5#1fcaeec37c10165bf4ce93cf03612520667ad4fd"
 dependencies = [
  "anyhow",
  "cfg_aliases",
@@ -2428,8 +2393,8 @@ dependencies = [
 
 [[package]]
 name = "linera-witty-macros"
-version = "0.16.0"
-source = "git+https://github.com/linera-io/linera-protocol.git#c073fbb656db91d91628dbfc64030d741a4f5a9d"
+version = "0.15.5"
+source = "git+https://github.com/linera-io/linera-protocol.git?tag=v0.15.5#1fcaeec37c10165bf4ce93cf03612520667ad4fd"
 dependencies = [
  "cfg_aliases",
  "heck 0.4.1",
@@ -2844,6 +2809,7 @@ dependencies = [
  "async-graphql",
  "battlechain-shared-types",
  "linera-sdk",
+ "linera-views",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
@@ -4124,9 +4090,9 @@ checksum = "5d99f8c9a7727884afe522e9bd5edbfc91a3312b36a77b5fb8926e4c31a41801"
 
 [[package]]
 name = "tonic"
-version = "0.14.2"
+version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eb7613188ce9f7df5bfe185db26c5814347d110db17920415cf2fbcad85e7203"
+checksum = "877c5b330756d856ffcc4553ab34a5684481ade925ecc54bcd1bf02b1d0d4d52"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -4135,7 +4101,6 @@ dependencies = [
  "http-body-util",
  "percent-encoding",
  "pin-project",
- "sync_wrapper 1.0.2",
  "tokio-stream",
  "tower-layer",
  "tower-service",
