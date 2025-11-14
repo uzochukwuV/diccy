@@ -1,32 +1,34 @@
-use async_trait::async_trait;
-use linera_sdk::{
-    linera_base_types::{Amount, ApplicationId, ChainId, Timestamp},
-    views::{RootView, ViewStorageContext},
-    Contract, ContractRuntime, Service, ServiceRuntime,
-};
-use serde::{Deserialize, Serialize};
-use shared_types::{
-    derive_random_u64, mul_fp, random_in_range, CharacterClass, CharacterSnapshot, EntropySeed,
+use async_graphql::{Request, Response, Schema, EmptyMutation, EmptySubscription, SimpleObject};
+use battlechain_shared_types::{
+    derive_random_u64, mul_fp, random_in_range, CharacterSnapshot, EntropySeed,
     FP_SCALE, MAX_COMBO_STACK, Owner, Stance,
 };
+use linera_sdk::{
+    abi::{ContractAbi, ServiceAbi, WithContractAbi, WithServiceAbi},
+    linera_base_types::{Amount, ApplicationId, ChainId, Timestamp},
+    views::{RegisterView, RootView, View, ViewStorageContext},
+    Contract, Service, ContractRuntime, ServiceRuntime,
+};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// Battle chain ABI
+/// Battle Chain Application ABI
 pub struct BattleChainAbi;
 
-impl linera_sdk::abi::ContractAbi for BattleChainAbi {
+impl ContractAbi for BattleChainAbi {
     type Operation = Operation;
     type Response = ();
 }
 
-impl linera_sdk::abi::ServiceAbi for BattleChainAbi {
-    type Query = ();
-    type QueryResponse = ();
+impl ServiceAbi for BattleChainAbi {
+    type Query = Request;
+    type QueryResponse = Response;
 }
 
 /// Battle status
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum BattleStatus {
+    #[default]
     WaitingForPlayers,
     InProgress,
     Completed,
@@ -145,174 +147,60 @@ impl BattleParticipant {
     }
 }
 
-/// Battle chain state (multi-owner chain)
+/// Battle chain state
 #[derive(RootView)]
+#[view(context = ViewStorageContext)]
 pub struct BattleState {
     /// Battle participants
-    pub player1: Option<BattleParticipant>,
-    pub player2: Option<BattleParticipant>,
+    pub player1: RegisterView<Option<BattleParticipant>>,
+    pub player2: RegisterView<Option<BattleParticipant>>,
 
     /// Battle metadata
-    pub status: BattleStatus,
-    pub current_round: u8,
-    pub max_rounds: u8,
-    pub winner: Option<Owner>,
+    pub status: RegisterView<BattleStatus>,
+    pub current_round: RegisterView<u8>,
+    pub max_rounds: RegisterView<u8>,
+    pub winner: RegisterView<Option<Owner>>,
 
     /// Round results history
-    pub round_results: Vec<RoundResult>,
+    pub round_results: RegisterView<Vec<RoundResult>>,
 
     /// Entropy for randomness
-    pub entropy_seed: Option<EntropySeed>,
-    pub entropy_index: u64,
+    pub entropy_seed: RegisterView<Option<EntropySeed>>,
+    pub entropy_index: RegisterView<u64>,
 
     /// Application references
-    pub battle_token_app: ApplicationId,
-    pub matchmaking_chain: ChainId,
+    pub battle_token_app: RegisterView<Option<ApplicationId>>,
+    pub matchmaking_chain: RegisterView<Option<ChainId>>,
 
     /// Platform fee (basis points, 300 = 3%)
-    pub platform_fee_bps: u16,
-    pub treasury_owner: Owner,
+    pub platform_fee_bps: RegisterView<u16>,
+    pub treasury_owner: RegisterView<Option<Owner>>,
 
     /// Timestamps
-    pub started_at: Option<Timestamp>,
-    pub completed_at: Option<Timestamp>,
-}
-
-/// Operations for Battle chain
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum Operation {
-    /// Initialize battle with both players
-    Initialize {
-        player1_owner: Owner,
-        player1_chain: ChainId,
-        player1_character: CharacterSnapshot,
-        player1_stake: Amount,
-        player2_owner: Owner,
-        player2_chain: ChainId,
-        player2_character: CharacterSnapshot,
-        player2_stake: Amount,
-        battle_token_app: ApplicationId,
-        matchmaking_chain: ChainId,
-        entropy_seed: [u8; 32],
-    },
-
-    /// Submit turn for current round
-    SubmitTurn {
-        round: u8,
-        turn: u8,
-        stance: Stance,
-        use_special: bool,
-    },
-
-    /// Execute current round (when all turns submitted)
-    ExecuteRound,
-
-    /// Finalize battle and distribute rewards
-    FinalizeBattle,
-}
-
-/// Messages sent from Battle chain
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum Message {
-    /// Notify player of battle result
-    BattleResult {
-        winner: Owner,
-        loser: Owner,
-        winner_payout: Amount,
-        rounds_played: u8,
-    },
-
-    /// Notify matchmaking of completion
-    BattleCompleted {
-        winner: Owner,
-        loser: Owner,
-    },
-}
-
-/// Battle errors
-#[derive(Debug, Error, Serialize, Deserialize)]
-pub enum BattleError {
-    #[error("Battle not initialized")]
-    NotInitialized,
-
-    #[error("Battle already in progress")]
-    AlreadyStarted,
-
-    #[error("Battle already completed")]
-    AlreadyCompleted,
-
-    #[error("Not a participant")]
-    NotParticipant,
-
-    #[error("Invalid round: {0}")]
-    InvalidRound(u8),
-
-    #[error("Invalid turn: {0}")]
-    InvalidTurn(u8),
-
-    #[error("Turn already submitted")]
-    TurnAlreadySubmitted,
-
-    #[error("Not all turns submitted")]
-    NotAllTurnsSubmitted,
-
-    #[error("Player defeated")]
-    PlayerDefeated,
-
-    #[error("Entropy not initialized")]
-    EntropyNotInitialized,
-
-    #[error("View error: {0}")]
-    ViewError(String),
-}
-
-impl From<linera_sdk::views::ViewError> for BattleError {
-    fn from(error: linera_sdk::views::ViewError) -> Self {
-        BattleError::ViewError(error.to_string())
-    }
-}
-
-pub struct BattleContract {
-    state: BattleState,
-    runtime: ContractRuntime,
+    pub started_at: RegisterView<Option<Timestamp>>,
+    pub completed_at: RegisterView<Option<Timestamp>>,
 }
 
 impl BattleState {
     /// Get next entropy value
     pub fn next_random(&mut self) -> Result<u64, BattleError> {
-        let entropy = self.entropy_seed.as_ref().ok_or(BattleError::EntropyNotInitialized)?;
-        let value = derive_random_u64(&entropy.seed, (self.entropy_index % 256) as u8);
-        self.entropy_index += 1;
+        let entropy = self.entropy_seed.get()
+            .as_ref()
+            .ok_or(BattleError::EntropyNotInitialized)?;
+        let value = derive_random_u64(&entropy.seed, (*self.entropy_index.get() % 256) as u8);
+        self.entropy_index.set(*self.entropy_index.get() + 1);
         Ok(value)
     }
 
-    /// Get participant by owner
-    pub fn get_participant(&self, owner: &Owner) -> Result<&BattleParticipant, BattleError> {
-        let p1 = self.player1.as_ref().ok_or(BattleError::NotInitialized)?;
-        let p2 = self.player2.as_ref().ok_or(BattleError::NotInitialized)?;
+    /// Get participant by owner (returns cloned participant)
+    pub fn get_participant(&self, owner: &Owner) -> Result<BattleParticipant, BattleError> {
+        let p1 = self.player1.get().as_ref().ok_or(BattleError::NotInitialized)?;
+        let p2 = self.player2.get().as_ref().ok_or(BattleError::NotInitialized)?;
 
         if p1.owner == *owner {
-            Ok(p1)
+            Ok(p1.clone())
         } else if p2.owner == *owner {
-            Ok(p2)
-        } else {
-            Err(BattleError::NotParticipant)
-        }
-    }
-
-    /// Get mutable participant by owner
-    pub fn get_participant_mut(&mut self, owner: &Owner) -> Result<&mut BattleParticipant, BattleError> {
-        let is_p1 = self.player1.as_ref()
-            .map(|p| p.owner == *owner)
-            .unwrap_or(false);
-        let is_p2 = self.player2.as_ref()
-            .map(|p| p.owner == *owner)
-            .unwrap_or(false);
-
-        if is_p1 {
-            Ok(self.player1.as_mut().unwrap())
-        } else if is_p2 {
-            Ok(self.player2.as_mut().unwrap())
+            Ok(p2.clone())
         } else {
             Err(BattleError::NotParticipant)
         }
@@ -329,14 +217,18 @@ impl BattleState {
     ) -> Result<(u32, bool, bool), BattleError> {
         let char = &attacker.character;
 
+        let entropy = self.entropy_seed.get()
+            .as_ref()
+            .ok_or(BattleError::EntropyNotInitialized)?;
+
         // Base damage (random in range)
         let base_damage = random_in_range(
-            &self.entropy_seed.as_ref().unwrap().seed,
-            (self.entropy_index % 256) as u8,
+            &entropy.seed,
+            (*self.entropy_index.get() % 256) as u8,
             char.min_damage as u64,
             char.max_damage as u64,
         ) as u32;
-        self.entropy_index += 1;
+        self.entropy_index.set(*self.entropy_index.get() + 1);
 
         let mut damage = base_damage as u128 * FP_SCALE;
 
@@ -386,7 +278,7 @@ impl BattleState {
         }
 
         // Apply defender's defense
-        let def_reduction = defender.character.defense as u128 * FP_SCALE / 100; // defense / 100
+        let def_reduction = defender.character.defense as u128 * FP_SCALE / 100;
         if def_reduction < FP_SCALE {
             damage = mul_fp(damage, FP_SCALE - def_reduction);
         } else {
@@ -398,7 +290,7 @@ impl BattleState {
             Stance::Balanced => damage,
             Stance::Aggressive => mul_fp(damage, 15 * FP_SCALE / 10), // 150% (take more)
             Stance::Defensive => mul_fp(damage, 5 * FP_SCALE / 10),   // 50% (take less)
-            Stance::Berserker => damage, // No change to incoming damage
+            Stance::Berserker => damage,
             Stance::Counter => mul_fp(damage, 6 * FP_SCALE / 10),     // 60% (take less)
         };
 
@@ -408,7 +300,7 @@ impl BattleState {
             if def_mod > 0 {
                 damage = ((damage as i128 * def_mod) / FP_SCALE as i128) as u128;
             } else {
-                damage = FP_SCALE; // Minimum 1 damage
+                damage = FP_SCALE;
             }
         }
 
@@ -496,26 +388,28 @@ impl BattleState {
 
     /// Execute full round (all 3 turns for both players)
     pub fn execute_full_round(&mut self) -> Result<RoundResult, BattleError> {
-        let mut p1 = self.player1.take().ok_or(BattleError::NotInitialized)?;
-        let mut p2 = self.player2.take().ok_or(BattleError::NotInitialized)?;
+        let mut p1 = self.player1.get().clone().ok_or(BattleError::NotInitialized)?;
+        let mut p2 = self.player2.get().clone().ok_or(BattleError::NotInitialized)?;
 
         let mut player1_actions = Vec::new();
         let mut player2_actions = Vec::new();
 
         // Execute 3 turns
         for turn in 0..3 {
-            let p1_turn = p1.turns_submitted[turn].as_ref().unwrap();
-            let p2_turn = p2.turns_submitted[turn].as_ref().unwrap();
+            let p1_turn = p1.turns_submitted[turn].clone().unwrap();
+            let p2_turn = p2.turns_submitted[turn].clone().unwrap();
+            let p1_stance = p1_turn.stance;
+            let p2_stance = p2_turn.stance;
 
             // Player 1 attacks
             if p1.current_hp > 0 && p2.current_hp > 0 {
-                let action = self.execute_turn(&mut p1, &mut p2, p1_turn, p2_turn.stance)?;
+                let action = self.execute_turn(&mut p1, &mut p2, &p1_turn, p2_stance)?;
                 player1_actions.push(action);
             }
 
             // Player 2 attacks
             if p2.current_hp > 0 && p1.current_hp > 0 {
-                let action = self.execute_turn(&mut p2, &mut p1, p2_turn, p1_turn.stance)?;
+                let action = self.execute_turn(&mut p2, &mut p1, &p2_turn, p1_stance)?;
                 player2_actions.push(action);
             }
 
@@ -526,7 +420,7 @@ impl BattleState {
         }
 
         let round_result = RoundResult {
-            round: self.current_round,
+            round: *self.current_round.get(),
             player1_actions,
             player2_actions,
             player1_hp: p1.current_hp,
@@ -534,270 +428,434 @@ impl BattleState {
         };
 
         // Restore players
-        self.player1 = Some(p1);
-        self.player2 = Some(p2);
+        self.player1.set(Some(p1));
+        self.player2.set(Some(p2));
 
         Ok(round_result)
     }
 }
 
-#[async_trait]
+/// Operations for Battle chain
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Operation {
+    /// Submit turn for current round
+    SubmitTurn {
+        round: u8,
+        turn: u8,
+        stance: Stance,
+        use_special: bool,
+    },
+
+    /// Execute current round (when all turns submitted)
+    ExecuteRound,
+
+    /// Finalize battle and distribute rewards
+    FinalizeBattle,
+}
+
+/// Messages sent from Battle chain
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Message {
+    /// Notify player of battle result
+    BattleResult {
+        winner: Owner,
+        loser: Owner,
+        winner_payout: Amount,
+        rounds_played: u8,
+    },
+
+    /// Notify matchmaking of completion
+    BattleCompleted {
+        winner: Owner,
+        loser: Owner,
+    },
+}
+
+/// Battle initialization parameters
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BattleParameters {
+    pub player1_owner: Owner,
+    pub player1_chain: ChainId,
+    pub player1_character: CharacterSnapshot,
+    pub player1_stake: Amount,
+    pub player2_owner: Owner,
+    pub player2_chain: ChainId,
+    pub player2_character: CharacterSnapshot,
+    pub player2_stake: Amount,
+    pub battle_token_app: ApplicationId,
+    pub matchmaking_chain: ChainId,
+    pub platform_fee_bps: u16,
+    pub treasury_owner: Owner,
+}
+
+/// Battle errors
+#[derive(Debug, Error)]
+pub enum BattleError {
+    #[error("Battle not initialized")]
+    NotInitialized,
+
+    #[error("Battle already in progress")]
+    AlreadyStarted,
+
+    #[error("Battle already completed")]
+    AlreadyCompleted,
+
+    #[error("Not a participant")]
+    NotParticipant,
+
+    #[error("Invalid round: {0}")]
+    InvalidRound(u8),
+
+    #[error("Invalid turn: {0}")]
+    InvalidTurn(u8),
+
+    #[error("Turn already submitted")]
+    TurnAlreadySubmitted,
+
+    #[error("Not all turns submitted")]
+    NotAllTurnsSubmitted,
+
+    #[error("Player defeated")]
+    PlayerDefeated,
+
+    #[error("Entropy not initialized")]
+    EntropyNotInitialized,
+
+    #[error("View error: {0}")]
+    ViewError(String),
+}
+
+impl From<linera_sdk::views::ViewError> for BattleError {
+    fn from(error: linera_sdk::views::ViewError) -> Self {
+        BattleError::ViewError(error.to_string())
+    }
+}
+
+/// Battle Contract
+pub struct BattleContract {
+    state: BattleState,
+    runtime: ContractRuntime<Self>,
+}
+
+linera_sdk::contract!(BattleContract);
+
+impl WithContractAbi for BattleContract {
+    type Abi = BattleChainAbi;
+}
+
 impl Contract for BattleContract {
-    type Error = BattleError;
-    type Storage = BattleState;
-    type State = BattleState;
     type Message = Message;
+    type Parameters = BattleParameters;
+    type InstantiationArgument = [u8; 32]; // Entropy seed
+    type EventValue = ();
 
-    async fn new(state: Self::State, runtime: ContractRuntime) -> Result<Self, Self::Error> {
-        Ok(BattleContract { state, runtime })
+    async fn load(runtime: ContractRuntime<Self>) -> Self {
+        let state = BattleState::load(runtime.root_view_storage_context())
+            .await
+            .expect("Failed to load state");
+
+        Self { state, runtime }
     }
 
-    fn state_mut(&mut self) -> &mut Self::State {
-        &mut self.state
+    async fn instantiate(&mut self, entropy_seed: [u8; 32]) {
+        let params = self.runtime.application_parameters();
+        let now = self.runtime.system_time();
+
+        // Initialize players
+        self.state.player1.set(Some(BattleParticipant::new(
+            params.player1_owner,
+            params.player1_chain,
+            params.player1_character,
+            params.player1_stake,
+        )));
+
+        self.state.player2.set(Some(BattleParticipant::new(
+            params.player2_owner,
+            params.player2_chain,
+            params.player2_character,
+            params.player2_stake,
+        )));
+
+        // Initialize battle metadata
+        self.state.status.set(BattleStatus::InProgress);
+        self.state.current_round.set(1);
+        self.state.max_rounds.set(3);
+        self.state.winner.set(None);
+        self.state.round_results.set(Vec::new());
+
+        // Initialize entropy
+        self.state.entropy_seed.set(Some(EntropySeed {
+            seed: entropy_seed,
+            index: 0,
+            timestamp: now,
+        }));
+        self.state.entropy_index.set(0);
+
+        // Initialize references
+        self.state.battle_token_app.set(Some(params.battle_token_app));
+        self.state.matchmaking_chain.set(Some(params.matchmaking_chain));
+        self.state.platform_fee_bps.set(params.platform_fee_bps);
+        self.state.treasury_owner.set(Some(params.treasury_owner));
+
+        // Initialize timestamps
+        self.state.started_at.set(Some(now));
+        self.state.completed_at.set(None);
     }
 
-    async fn initialize(
-        &mut self,
-        context: &linera_sdk::OperationContext,
-        argument: Self::InitializationArgument,
-    ) -> Result<(), Self::Error> {
-        if let Operation::Initialize {
-            player1_owner,
-            player1_chain,
-            player1_character,
-            player1_stake,
-            player2_owner,
-            player2_chain,
-            player2_character,
-            player2_stake,
-            battle_token_app,
-            matchmaking_chain,
-            entropy_seed,
-        } = argument
-        {
-            self.state.player1 = Some(BattleParticipant::new(
-                player1_owner,
-                player1_chain,
-                player1_character,
-                player1_stake,
-            ));
-
-            self.state.player2 = Some(BattleParticipant::new(
-                player2_owner,
-                player2_chain,
-                player2_character,
-                player2_stake,
-            ));
-
-            self.state.status = BattleStatus::InProgress;
-            self.state.current_round = 1;
-            self.state.max_rounds = 3;
-            self.state.battle_token_app = battle_token_app;
-            self.state.matchmaking_chain = matchmaking_chain;
-            self.state.platform_fee_bps = 300; // 3%
-            self.state.started_at = Some(context.system.timestamp);
-
-            // Initialize entropy
-            self.state.entropy_seed = Some(EntropySeed {
-                seed: entropy_seed,
-                index: 0,
-                timestamp: context.system.timestamp,
-            });
-            self.state.entropy_index = 0;
-
-            // TODO: Set treasury owner
-            self.state.treasury_owner = player1_owner; // Placeholder
-
-            Ok(())
-        } else {
-            Err(BattleError::ViewError("Invalid initialization".to_string()))
-        }
-    }
-
-    async fn execute_operation(
-        &mut self,
-        context: &linera_sdk::OperationContext,
-        operation: Self::Operation,
-    ) -> Result<(), Self::Error> {
-        let caller = context
-            .authenticated_signer
-            .ok_or(BattleError::NotParticipant)?;
-
+    async fn execute_operation(&mut self, operation: Operation) -> Self::Response {
         match operation {
-            Operation::Initialize { .. } => {
-                // Handled in initialize()
-                Ok(())
-            }
-
             Operation::SubmitTurn {
                 round,
                 turn,
                 stance,
                 use_special,
             } => {
-                if self.state.status != BattleStatus::InProgress {
-                    return Err(BattleError::AlreadyCompleted);
+                if *self.state.status.get() != BattleStatus::InProgress {
+                    return; // Battle not in progress
                 }
 
-                if round != self.state.current_round {
-                    return Err(BattleError::InvalidRound(round));
+                if round != *self.state.current_round.get() {
+                    return; // Invalid round
                 }
 
                 if turn >= 3 {
-                    return Err(BattleError::InvalidTurn(turn));
+                    return; // Invalid turn
                 }
 
-                let participant = self.state.get_participant_mut(&caller)?;
+                // Get caller from chain ownership
+                let chain_ownership = self.runtime.chain_ownership();
+                let caller = chain_ownership
+                    .super_owners
+                    .iter()
+                    .next()
+                    .expect("No owner found")
+                    .clone();
 
-                if participant.current_hp == 0 {
-                    return Err(BattleError::PlayerDefeated);
+                // Get participant and update turn
+                let mut p1 = self.state.player1.get().clone();
+                let mut p2 = self.state.player2.get().clone();
+
+                if let Some(ref mut participant) = p1 {
+                    if participant.owner == caller {
+                        if participant.current_hp > 0 && participant.turns_submitted[turn as usize].is_none() {
+                            participant.turns_submitted[turn as usize] = Some(TurnSubmission {
+                                round,
+                                turn,
+                                stance,
+                                use_special,
+                            });
+                            self.state.player1.set(p1);
+                        }
+                        return;
+                    }
                 }
 
-                if participant.turns_submitted[turn as usize].is_some() {
-                    return Err(BattleError::TurnAlreadySubmitted);
+                if let Some(ref mut participant) = p2 {
+                    if participant.owner == caller {
+                        if participant.current_hp > 0 && participant.turns_submitted[turn as usize].is_none() {
+                            participant.turns_submitted[turn as usize] = Some(TurnSubmission {
+                                round,
+                                turn,
+                                stance,
+                                use_special,
+                            });
+                            self.state.player2.set(p2);
+                        }
+                    }
                 }
-
-                let submission = TurnSubmission {
-                    round,
-                    turn,
-                    stance,
-                    use_special,
-                };
-
-                participant.turns_submitted[turn as usize] = Some(submission);
-
-                Ok(())
             }
 
             Operation::ExecuteRound => {
-                if self.state.status != BattleStatus::InProgress {
-                    return Err(BattleError::AlreadyCompleted);
+                if *self.state.status.get() != BattleStatus::InProgress {
+                    return;
                 }
 
                 // Check if both players submitted all turns
-                let p1 = self.state.player1.as_ref().ok_or(BattleError::NotInitialized)?;
-                let p2 = self.state.player2.as_ref().ok_or(BattleError::NotInitialized)?;
+                let p1 = self.state.player1.get().clone();
+                let p2 = self.state.player2.get().clone();
 
-                if !p1.all_turns_submitted() || !p2.all_turns_submitted() {
-                    return Err(BattleError::NotAllTurnsSubmitted);
+                if let (Some(ref player1), Some(ref player2)) = (p1, p2) {
+                    if !player1.all_turns_submitted() || !player2.all_turns_submitted() {
+                        return; // Not all turns submitted
+                    }
+
+                    // Execute the round
+                    if let Ok(round_result) = self.state.execute_full_round() {
+                        let mut results = self.state.round_results.get().clone();
+                        results.push(round_result.clone());
+                        self.state.round_results.set(results);
+
+                        // Check for winner
+                        let p1 = self.state.player1.get().clone().unwrap();
+                        let p2 = self.state.player2.get().clone().unwrap();
+                        let now = self.runtime.system_time();
+
+                        if p1.current_hp == 0 {
+                            self.state.winner.set(Some(p2.owner));
+                            self.state.status.set(BattleStatus::Completed);
+                            self.state.completed_at.set(Some(now));
+                        } else if p2.current_hp == 0 {
+                            self.state.winner.set(Some(p1.owner));
+                            self.state.status.set(BattleStatus::Completed);
+                            self.state.completed_at.set(Some(now));
+                        } else if *self.state.current_round.get() >= *self.state.max_rounds.get() {
+                            // Max rounds reached, winner is player with more HP
+                            let winner_owner = if p1.current_hp > p2.current_hp {
+                                p1.owner
+                            } else {
+                                p2.owner
+                            };
+                            self.state.winner.set(Some(winner_owner));
+                            self.state.status.set(BattleStatus::Completed);
+                            self.state.completed_at.set(Some(now));
+                        } else {
+                            // Continue to next round
+                            self.state.current_round.set(*self.state.current_round.get() + 1);
+                            let mut p1 = self.state.player1.get().clone().unwrap();
+                            let mut p2 = self.state.player2.get().clone().unwrap();
+                            p1.reset_turns();
+                            p2.reset_turns();
+                            self.state.player1.set(Some(p1));
+                            self.state.player2.set(Some(p2));
+                        }
+                    }
                 }
-
-                // Execute the round
-                let round_result = self.state.execute_full_round()?;
-                self.state.round_results.push(round_result);
-
-                // Check for winner
-                let p1 = self.state.player1.as_ref().unwrap();
-                let p2 = self.state.player2.as_ref().unwrap();
-
-                if p1.current_hp == 0 {
-                    self.state.winner = Some(p2.owner);
-                    self.state.status = BattleStatus::Completed;
-                    self.state.completed_at = Some(context.system.timestamp);
-                } else if p2.current_hp == 0 {
-                    self.state.winner = Some(p1.owner);
-                    self.state.status = BattleStatus::Completed;
-                    self.state.completed_at = Some(context.system.timestamp);
-                } else if self.state.current_round >= self.state.max_rounds {
-                    // Max rounds reached, winner is player with more HP
-                    self.state.winner = if p1.current_hp > p2.current_hp {
-                        Some(p1.owner)
-                    } else {
-                        Some(p2.owner)
-                    };
-                    self.state.status = BattleStatus::Completed;
-                    self.state.completed_at = Some(context.system.timestamp);
-                } else {
-                    // Continue to next round
-                    self.state.current_round += 1;
-                    self.state.player1.as_mut().unwrap().reset_turns();
-                    self.state.player2.as_mut().unwrap().reset_turns();
-                }
-
-                Ok(())
             }
 
             Operation::FinalizeBattle => {
-                if self.state.status != BattleStatus::Completed {
-                    return Err(BattleError::ViewError("Battle not completed".to_string()));
+                if *self.state.status.get() != BattleStatus::Completed {
+                    return;
                 }
 
-                let p1 = self.state.player1.as_ref().ok_or(BattleError::NotInitialized)?;
-                let p2 = self.state.player2.as_ref().ok_or(BattleError::NotInitialized)?;
-                let winner_owner = self.state.winner.ok_or(BattleError::ViewError("No winner".to_string()))?;
-
-                let (winner, loser) = if winner_owner == p1.owner {
-                    (p1, p2)
-                } else {
-                    (p2, p1)
-                };
-
-                // Calculate payouts
-                let total_stakes = p1.stake.saturating_add(p2.stake);
-                let platform_fee = Amount::from_attos(
-                    (total_stakes.to_attos() * self.state.platform_fee_bps as u128) / 10000
-                );
-                let winner_payout = total_stakes.saturating_sub(platform_fee);
-
-                // TODO: Transfer tokens
-                // - Send platform_fee to treasury
-                // - Send winner_payout to winner's player chain
-
-                // Send result messages to player chains
-                // TODO: Implement cross-chain messaging
-
-                // Notify matchmaking
-                // TODO: Send message to matchmaking chain
-
-                Ok(())
+                // TODO: Implement reward distribution
+                // - Calculate platform fee
+                // - Send winner payout
+                // - Notify player chains
+                // - Notify matchmaking chain
             }
         }
     }
 
-    async fn execute_message(
-        &mut self,
-        _context: &linera_sdk::MessageContext,
-        _message: Self::Message,
-    ) -> Result<(), Self::Error> {
+    async fn execute_message(&mut self, _message: Message) {
         // Battle chain primarily sends messages, doesn't receive many
-        Ok(())
     }
 
-    async fn store(mut self) -> Result<Self::State, Self::Error> {
-        self.state.save().await?;
-        Ok(self.state)
+    async fn store(mut self) {
+        self.state.save().await.expect("Failed to save state");
     }
 }
 
+/// Battle Service
 pub struct BattleService {
     state: BattleState,
-    runtime: ServiceRuntime,
 }
 
-#[async_trait]
+impl WithServiceAbi for BattleService {
+    type Abi = BattleChainAbi;
+}
+
 impl Service for BattleService {
-    type Error = BattleError;
-    type Storage = BattleState;
-    type State = BattleState;
+    type Parameters = ();
 
-    async fn new(state: Self::State, runtime: ServiceRuntime) -> Result<Self, Self::Error> {
-        Ok(BattleService { state, runtime })
+    async fn new(runtime: ServiceRuntime<Self>) -> Self {
+        let state = BattleState::load(runtime.root_view_storage_context())
+            .await
+            .expect("Failed to load state");
+
+        Self { state }
     }
 
-    async fn handle_query(
-        &mut self,
-        _context: &linera_sdk::QueryContext,
-        _query: Self::Query,
-    ) -> Result<Self::QueryResponse, Self::Error> {
-        // TODO: Implement GraphQL queries for:
-        // - Current battle state
-        // - Round results
-        // - Player HP and stats
-        // - Turn submissions status
-        // - Winner and payouts
-        Ok(())
+    async fn handle_query(&self, request: Request) -> Response {
+        let schema = Schema::build(
+            QueryRoot::new(&self.state).await,
+            EmptyMutation,
+            EmptySubscription,
+        )
+        .finish();
+
+        schema.execute(request).await
     }
 }
 
-linera_sdk::contract!(BattleContract);
-linera_sdk::service!(BattleService);
+/// GraphQL Query Root
+#[derive(Clone)]
+struct QueryRoot {
+    status: BattleStatus,
+    current_round: u8,
+    max_rounds: u8,
+    round_count: usize,
+    player1_hp: u32,
+    player2_hp: u32,
+}
+
+impl QueryRoot {
+    async fn new(state: &BattleState) -> Self {
+        let (p1_hp, p2_hp) = if let (Some(p1), Some(p2)) = (state.player1.get(), state.player2.get()) {
+            (p1.current_hp, p2.current_hp)
+        } else {
+            (0, 0)
+        };
+
+        Self {
+            status: *state.status.get(),
+            current_round: *state.current_round.get(),
+            max_rounds: *state.max_rounds.get(),
+            round_count: state.round_results.get().len(),
+            player1_hp: p1_hp,
+            player2_hp: p2_hp,
+        }
+    }
+}
+
+#[async_graphql::Object]
+impl QueryRoot {
+    /// Get battle status
+    async fn status(&self) -> String {
+        format!("{:?}", self.status)
+    }
+
+    /// Get current round number
+    async fn current_round(&self) -> i32 {
+        self.current_round as i32
+    }
+
+    /// Get maximum rounds
+    async fn max_rounds(&self) -> i32 {
+        self.max_rounds as i32
+    }
+
+    /// Get completed round count
+    async fn completed_rounds(&self) -> i32 {
+        self.round_count as i32
+    }
+
+    /// Get player 1 HP
+    async fn player1_hp(&self) -> i32 {
+        self.player1_hp as i32
+    }
+
+    /// Get player 2 HP
+    async fn player2_hp(&self) -> i32 {
+        self.player2_hp as i32
+    }
+
+    /// Get battle info
+    async fn battle_info(&self) -> BattleInfo {
+        BattleInfo {
+            status: format!("{:?}", self.status),
+            current_round: self.current_round as i32,
+            completed_rounds: self.round_count as i32,
+            player1_hp: self.player1_hp as i32,
+            player2_hp: self.player2_hp as i32,
+        }
+    }
+}
+
+#[derive(SimpleObject)]
+struct BattleInfo {
+    status: String,
+    current_round: i32,
+    completed_rounds: i32,
+    player1_hp: i32,
+    player2_hp: i32,
+}
