@@ -6,7 +6,6 @@ use linera_sdk::{
     Contract, Service, ContractRuntime, ServiceRuntime,
 };
 use serde::{Deserialize, Serialize};
-use std::marker::PhantomData;
 use thiserror::Error;
 
 // Type alias for consistency
@@ -27,8 +26,8 @@ impl ServiceAbi for BattleTokenAbi {
 
 /// Token State - manages all BATTLE token balances and operations
 #[derive(RootView)]
-#[view(context = C)]
-pub struct BattleTokenState<C> {
+#[view(context = ViewStorageContext)]
+pub struct BattleTokenState {
     /// Token metadata
     pub name: RegisterView<String>,
     pub symbol: RegisterView<String>,
@@ -52,13 +51,9 @@ pub struct BattleTokenState<C> {
     /// Timestamps
     pub created_at: RegisterView<Timestamp>,
     pub last_activity: RegisterView<Timestamp>,
-
-    /// Phantom data to use type parameter
-    #[view(skip)]
-    _phantom: PhantomData<C>,
 }
 
-impl<C> BattleTokenState<C> {
+impl BattleTokenState {
     /// Get balance of account
     pub async fn balance_of(&self, account: &Owner) -> Amount {
         self.balances
@@ -109,15 +104,17 @@ impl<C> BattleTokenState<C> {
 
         // Track new holder
         if to_balance == Amount::ZERO && amount > Amount::ZERO {
-            if !self.accounts.contains(&to) {
-                self.accounts.push(to);
-                self.total_holders += 1;
+            let mut accounts = self.accounts.get().clone();
+            if !accounts.contains(&to) {
+                accounts.push(to);
+                self.accounts.set(accounts);
+                self.total_holders.set(*self.total_holders.get() + 1);
             }
         }
 
         // Update stats
-        self.total_transfers += 1;
-        self.last_activity = now;
+        self.total_transfers.set(*self.total_transfers.get() + 1);
+        self.last_activity.set(now);
 
         Ok(())
     }
@@ -194,17 +191,17 @@ impl<C> BattleTokenState<C> {
         self.balances.insert(&from, new_balance)?;
 
         // Reduce total supply
-        self.total_supply = self
-            .total_supply
+        let new_total_supply = self.total_supply.get()
             .try_sub(amount)
             .map_err(|_| TokenError::MathOverflow)?;
+        self.total_supply.set(new_total_supply);
 
-        self.total_burned = self
-            .total_burned
+        let new_total_burned = self.total_burned.get()
             .try_add(amount)
             .map_err(|_| TokenError::MathOverflow)?;
+        self.total_burned.set(new_total_burned);
 
-        self.last_activity = now;
+        self.last_activity.set(now);
 
         Ok(())
     }
@@ -221,20 +218,22 @@ impl<C> BattleTokenState<C> {
         self.balances.insert(&to, new_balance)?;
 
         // Increase total supply
-        self.total_supply = self
-            .total_supply
+        let new_total_supply = self.total_supply.get()
             .try_add(amount)
             .map_err(|_| TokenError::MathOverflow)?;
+        self.total_supply.set(new_total_supply);
 
         // Track new holder
         if balance == Amount::ZERO {
-            if !self.accounts.contains(&to) {
-                self.accounts.push(to);
-                self.total_holders += 1;
+            let mut accounts = self.accounts.get().clone();
+            if !accounts.contains(&to) {
+                accounts.push(to);
+                self.accounts.set(accounts);
+                self.total_holders.set(*self.total_holders.get() + 1);
             }
         }
 
-        self.last_activity = now;
+        self.last_activity.set(now);
 
         Ok(())
     }
@@ -323,7 +322,7 @@ impl From<linera_sdk::views::ViewError> for TokenError {
 
 /// Token Contract
 pub struct BattleTokenContract {
-    state: BattleTokenState<ViewStorageContext>,
+    state: BattleTokenState,
     runtime: ContractRuntime<Self>,
 }
 
@@ -359,19 +358,21 @@ impl Contract for BattleTokenContract {
         let now = self.runtime.system_time();
 
         // Initialize token metadata
-        self.state.name = "BattleChain Token".to_string();
-        self.state.symbol = "BATTLE".to_string();
-        self.state.decimals = 6;
-        self.state.total_supply = initial_supply;
-        self.state.total_transfers = 0;
-        self.state.total_holders = 1;
-        self.state.total_burned = Amount::ZERO;
-        self.state.created_at = now;
-        self.state.last_activity = now;
+        self.state.name.set("BattleChain Token".to_string());
+        self.state.symbol.set("BATTLE".to_string());
+        self.state.decimals.set(6);
+        self.state.total_supply.set(initial_supply);
+        self.state.total_transfers.set(0);
+        self.state.total_holders.set(1);
+        self.state.total_burned.set(Amount::ZERO);
+        self.state.created_at.set(now);
+        self.state.last_activity.set(now);
 
         // Mint initial supply to creator
         self.state.balances.insert(&creator, initial_supply).expect("Failed to set initial balance");
-        self.state.accounts.push(creator);
+        let mut accounts = self.state.accounts.get().clone();
+        accounts.push(creator);
+        self.state.accounts.set(accounts);
     }
 
     async fn execute_operation(&mut self, operation: Operation) -> Self::Response {
@@ -487,14 +488,15 @@ impl Contract for BattleTokenContract {
 
 /// Token Service (GraphQL queries)
 pub struct BattleTokenService {
-    state: BattleTokenState<ViewStorageContext>,
+    state: BattleTokenState,
 }
 
 impl WithServiceAbi for BattleTokenService {
     type Abi = BattleTokenAbi;
 }
 
-// TODO: Re-enable after fixing Contract compilation
+// NOTE: Only one of contract! or service! can be used per library
+// The contract! macro includes service functionality
 // linera_sdk::service!(BattleTokenService);
 
 impl Service for BattleTokenService {
@@ -533,7 +535,7 @@ struct QueryRoot {
 }
 
 impl QueryRoot {
-    async fn new(state: &BattleTokenState<ViewStorageContext>) -> Self {
+    async fn new(state: &BattleTokenState) -> Self {
         Self {
             name: state.name.get().clone(),
             symbol: state.symbol.get().clone(),
