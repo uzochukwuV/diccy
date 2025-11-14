@@ -582,12 +582,13 @@ impl Service for RegistryService {
     }
 }
 
-/// GraphQL Query Root
+/// GraphQL Query Root - simplified version without state references
 #[derive(Clone)]
 struct QueryRoot {
     total_characters: u64,
     total_battles: u64,
     total_volume: String,
+    top_character_ids: Vec<String>,
 }
 
 impl QueryRoot {
@@ -596,6 +597,7 @@ impl QueryRoot {
             total_characters: *state.total_characters.get(),
             total_battles: *state.total_battles.get(),
             total_volume: state.total_volume.get().to_string(),
+            top_character_ids: state.top_elo.get().clone(),
         }
     }
 }
@@ -613,8 +615,8 @@ impl QueryRoot {
     }
 
     /// Get total volume wagered
-    async fn total_volume(&self) -> &str {
-        &self.total_volume
+    async fn total_volume(&self) -> String {
+        self.total_volume.clone()
     }
 
     /// Get global registry stats
@@ -624,6 +626,13 @@ impl QueryRoot {
             total_battles: self.total_battles,
             total_volume: self.total_volume.clone(),
         }
+    }
+
+    /// Get top character IDs by ELO (for leaderboard)
+    /// Note: Full character data requires separate queries per ID
+    async fn top_characters(&self, limit: Option<i32>) -> Vec<String> {
+        let limit = limit.unwrap_or(10).min(100) as usize;
+        self.top_character_ids.iter().take(limit).cloned().collect()
     }
 }
 
