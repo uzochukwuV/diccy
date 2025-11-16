@@ -267,6 +267,43 @@ impl MatchmakingContract {
             total_stake, // Initial balance for the battle chain
         );
 
+        // === CRITICAL: Send Initialize message to trigger automatic deployment ===
+        // This message will cause Linera to automatically deploy the battle application
+        // to the newly created chain (because battle_app_id is in required_application_ids)
+
+        use battle_chain::{Message as BattleMessage, BattleParticipant};
+
+        // Create battle participants from queue entries
+        let participant1 = BattleParticipant::new(
+            pending.player1.player_owner,
+            pending.player1.player_chain,
+            pending.player1.character.clone(),
+            pending.player1.stake,
+        );
+
+        let participant2 = BattleParticipant::new(
+            pending.player2.player_owner,
+            pending.player2.player_chain,
+            pending.player2.character.clone(),
+            pending.player2.stake,
+        );
+
+        // Send initialization message to battle chain
+        // Linera will auto-deploy the battle application when it sees this message!
+        self.runtime
+            .prepare_message(BattleMessage::Initialize {
+                player1: participant1,
+                player2: participant2,
+                matchmaking_chain: self.runtime.chain_id(),
+            })
+            .with_authentication() // Verify sender is matchmaking
+            .send_to(battle_chain_id);
+
+        log::info!(
+            "Sent Initialize message to battle chain {:?} - auto-deployment will occur",
+            battle_chain_id
+        );
+
         // Store battle metadata
         let metadata = BattleMetadata {
             player1: pending.player1.player_chain,

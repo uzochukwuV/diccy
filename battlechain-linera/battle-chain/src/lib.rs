@@ -469,9 +469,17 @@ pub enum Operation {
     FinalizeBattle,
 }
 
-/// Messages sent from Battle chain
+/// Messages sent TO and FROM Battle chain
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Message {
+    /// Initialize battle after auto-deployment (FIRST message received)
+    /// This triggers automatic deployment of battle application to new chain
+    Initialize {
+        player1: BattleParticipant,
+        player2: BattleParticipant,
+        matchmaking_chain: ChainId,
+    },
+
     /// Notify player of battle result
     BattleResult {
         winner: Owner,
@@ -790,8 +798,55 @@ impl Contract for BattleContract {
         }
     }
 
-    async fn execute_message(&mut self, _message: Message) {
-        // Battle chain primarily sends messages, doesn't receive many
+    async fn execute_message(&mut self, message: Message) {
+        match message {
+            Message::Initialize { player1, player2, matchmaking_chain } => {
+                // This message triggers automatic deployment!
+                // Verify sender is the matchmaking chain (security check)
+                let sender_chain = self.runtime.message_origin_chain_id()
+                    .expect("Message must have origin");
+
+                assert_eq!(
+                    sender_chain, matchmaking_chain,
+                    "Only matchmaking chain can initialize battles"
+                );
+
+                // Check battle not already initialized
+                if self.state.player1.get().is_some() || self.state.player2.get().is_some() {
+                    panic!("Battle already initialized");
+                }
+
+                // Initialize battle participants
+                self.state.player1.set(Some(player1.clone()));
+                self.state.player2.set(Some(player2.clone()));
+
+                // Set battle status to in progress
+                self.state.status.set(BattleStatus::InProgress);
+                self.state.current_round.set(0);
+                self.state.max_rounds.set(10); // Default max rounds
+                self.state.winner.set(None);
+
+                // Initialize combat log
+                let mut battle_log = self.state.battle_log.get().clone();
+                battle_log.push(format!(
+                    "Battle initialized: {:?} vs {:?}",
+                    player1.owner, player2.owner
+                ));
+                self.state.battle_log.set(battle_log);
+
+                log::info!(
+                    "Battle initialized on chain {:?}: {:?} vs {:?}",
+                    self.runtime.chain_id(),
+                    player1.owner,
+                    player2.owner
+                );
+            }
+
+            Message::BattleResult { .. } | Message::BattleCompleted { .. } => {
+                // These are outgoing messages, not handled here
+                log::warn!("Received outgoing message type - ignoring");
+            }
+        }
     }
 
     async fn store(mut self) {
