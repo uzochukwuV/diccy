@@ -125,18 +125,36 @@ impl Market {
     }
 
     /// Calculate winnings for a bet
+    /// Formula: (bet_amount / total_winning_side_bets) * total_pool * (1 - platform_fee)
     pub fn calculate_winnings(&self, bet: &Bet) -> Amount {
         if self.winner != Some(bet.side) {
             return Amount::ZERO;
         }
 
-        // Winnings = bet_amount * odds / 10000
-        // Since Amount doesn't support direct arithmetic, we work with smaller multipliers
-        // For simplicity, just return the bet amount for now
-        // TODO: Implement proper fixed-point arithmetic for odds-based payouts
+        // Get total bets for the winning side
+        let winning_side_total = match bet.side {
+            BetSide::Player1 => self.total_player1_bets,
+            BetSide::Player2 => self.total_player2_bets,
+        };
 
-        // For now, return 2x the bet for winners (simpler than complex odds calculation)
-        bet.amount.saturating_add(bet.amount)
+        // If no bets on winning side (shouldn't happen), return zero
+        if winning_side_total.is_zero() {
+            return Amount::ZERO;
+        }
+
+        // Convert to u128 for fixed-point arithmetic
+        let total_pool_u128: u128 = self.total_pool.try_into().unwrap_or(0);
+        let bet_amount_u128: u128 = bet.amount.try_into().unwrap_or(0);
+        let winning_total_u128: u128 = winning_side_total.try_into().unwrap_or(1);
+
+        // Calculate platform fee: (total_pool * fee_bps) / 10000
+        let fee_amount = (total_pool_u128 * self.platform_fee_bps as u128) / 10000;
+        let pool_after_fee = total_pool_u128.saturating_sub(fee_amount);
+
+        // Calculate proportional winnings: (bet_amount * pool_after_fee) / winning_total
+        let winnings_u128 = (bet_amount_u128 * pool_after_fee) / winning_total_u128;
+
+        Amount::from_attos(winnings_u128)
     }
 }
 
