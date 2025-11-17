@@ -9,6 +9,27 @@ use linera_sdk::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+// Battle event types for subscription (defined inline to avoid dependencies)
+/// Events emitted by battle-chain
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum BattleEvent {
+    BattleStarted {
+        battle_chain: ChainId,
+        player1_chain: ChainId,
+        player2_chain: ChainId,
+        total_stake: Amount,
+    },
+    BattleCompleted {
+        battle_chain: ChainId,
+        player1_chain: ChainId,
+        player2_chain: ChainId,
+        winner_chain: ChainId,
+        loser_chain: ChainId,
+        stake: Amount,
+        rounds_played: u8,
+    },
+}
+
 /// Registry Chain Application ABI
 pub struct RegistryAbi;
 
@@ -304,6 +325,12 @@ pub enum Operation {
     MarkCharacterDefeated {
         character_id: String,
     },
+
+    /// Subscribe to battle events from a battle chain
+    SubscribeToBattleEvents {
+        battle_chain_id: ChainId,
+        battle_app_id: linera_sdk::linera_base_types::ApplicationId,
+    },
 }
 
 /// Messages
@@ -498,6 +525,21 @@ impl Contract for RegistryContract {
                 stats.lives_remaining = 0;
 
                 self.state.characters.insert(&character_id, stats)?;
+            }
+
+            Operation::SubscribeToBattleEvents { battle_chain_id, battle_app_id } => {
+                // Subscribe to battle events from the specified battle chain
+                self.runtime.subscribe_to_events(
+                    battle_chain_id,
+                    battle_app_id,
+                    "battle_events".into(),
+                );
+
+                log::info!(
+                    "Registry subscribed to battle events from chain {:?}, app {:?}",
+                    battle_chain_id,
+                    battle_app_id
+                );
             }
         }
 

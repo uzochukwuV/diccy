@@ -9,6 +9,27 @@ use linera_sdk::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+// Battle event types for subscription (defined inline to avoid dependencies)
+/// Events emitted by battle-chain
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum BattleEvent {
+    BattleStarted {
+        battle_chain: ChainId,
+        player1_chain: ChainId,
+        player2_chain: ChainId,
+        total_stake: Amount,
+    },
+    BattleCompleted {
+        battle_chain: ChainId,
+        player1_chain: ChainId,
+        player2_chain: ChainId,
+        winner_chain: ChainId,
+        loser_chain: ChainId,
+        stake: Amount,
+        rounds_played: u8,
+    },
+}
+
 /// Prediction Market Chain Application ABI
 pub struct PredictionAbi;
 
@@ -195,6 +216,12 @@ pub enum Operation {
     UpdateConfig {
         platform_fee_bps: u16,
         treasury_owner: Owner,
+    },
+
+    /// Subscribe to battle events from a battle chain
+    SubscribeToBattleEvents {
+        battle_chain_id: ChainId,
+        battle_app_id: linera_sdk::linera_base_types::ApplicationId,
     },
 }
 
@@ -450,22 +477,42 @@ impl Contract for PredictionContract {
                 self.state.platform_fee_bps.set(platform_fee_bps);
                 self.state.treasury_owner.set(Some(treasury_owner));
             }
+
+            Operation::SubscribeToBattleEvents { battle_chain_id, battle_app_id } => {
+                // Subscribe to battle events from the specified battle chain
+                self.runtime.subscribe_to_events(
+                    battle_chain_id,
+                    battle_app_id,
+                    "battle_events".into(),
+                );
+
+                log::info!(
+                    "Subscribed to battle events from chain {:?}, app {:?}",
+                    battle_chain_id,
+                    battle_app_id
+                );
+            }
         }
 
         Ok(())
     }
 
     async fn execute_message(&mut self, message: Message) {
+        // NOTE: This handler processes both direct messages and subscribed events
+        // Events from battle-chain arrive here after subscription via SubscribeToBattleEvents
         match message {
             Message::BattleStarted { battle_chain } => {
-                // Find market for this battle and close it
+                // Event: BattleEvent::BattleStarted received
+                // Close betting for this battle's market
                 if let Some(market_id) = self.state.battle_to_market.get(&battle_chain).await.ok().flatten() {
                     let _ = self.execute_operation(Operation::CloseMarket { market_id }).await;
+                    log::info!("Closed market {} for battle {:?}", market_id, battle_chain);
                 }
             }
 
             Message::BattleEnded { battle_chain, winner_chain } => {
-                // Find market and determine winner
+                // Event: BattleEvent::BattleCompleted received
+                // Settle the market with the battle result
                 if let Some(market_id) = self.state.battle_to_market.get(&battle_chain).await.ok().flatten() {
                     if let Some(market) = self.state.markets.get(&market_id).await.ok().flatten() {
                         let winner = if winner_chain == market.player1_chain {
@@ -475,6 +522,7 @@ impl Contract for PredictionContract {
                         };
 
                         let _ = self.execute_operation(Operation::SettleMarket { market_id, winner }).await;
+                        log::info!("Settled market {} for battle {:?}, winner: {:?}", market_id, battle_chain, winner);
                     }
                 }
             }

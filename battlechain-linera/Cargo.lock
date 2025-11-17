@@ -3242,6 +3242,7 @@ dependencies = [
  "battlechain-shared-types",
  "linera-sdk 0.15.6",
  "linera-views 0.15.6",
+ "log",
  "serde",
  "thiserror 2.0.17",
 ]
@@ -3547,6 +3548,7 @@ dependencies = [
  "battlechain-shared-types",
  "linera-sdk 0.15.6",
  "linera-views 0.15.6",
+ "log",
  "serde",
  "thiserror 2.0.17",
 ]

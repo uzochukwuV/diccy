@@ -40,6 +40,29 @@ impl ServiceAbi for BattleChainAbi {
     type QueryResponse = Response;
 }
 
+/// Event values emitted by battle-chain for cross-chain notifications
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum BattleEvent {
+    /// Battle started - emitted when battle begins
+    BattleStarted {
+        battle_chain: ChainId,
+        player1_chain: ChainId,
+        player2_chain: ChainId,
+        total_stake: Amount,
+    },
+
+    /// Battle completed - emitted when battle finishes
+    BattleCompleted {
+        battle_chain: ChainId,
+        player1_chain: ChainId,
+        player2_chain: ChainId,
+        winner_chain: ChainId,
+        loser_chain: ChainId,
+        stake: Amount,
+        rounds_played: u8,
+    },
+}
+
 /// Battle status
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum BattleStatus {
@@ -589,7 +612,7 @@ impl Contract for BattleContract {
     type Message = Message;
     type Parameters = BattleParameters;
     type InstantiationArgument = (); // No arguments needed
-    type EventValue = ();
+    type EventValue = BattleEvent;
 
     async fn load(runtime: ContractRuntime<Self>) -> Self {
         let state = BattleState::load(runtime.root_view_storage_context())
@@ -854,25 +877,39 @@ impl Contract for BattleContract {
                         .send_to(*matchmaking_chain);
                 }
 
-                // TODO: Cross-application notifications
-                // The following notifications need architectural decisions:
-                //
-                // 1. Prediction Market notification:
-                //    - Should send BattleEnded { battle_chain, winner_chain }
-                //    - Challenge: prepare_message sends to same app type on different chain
-                //    - Solutions: events + subscriptions, or coordinator pattern
-                //
-                // 2. Registry notification for leaderboard:
-                //    - Should send BattleCompleted with full stats
-                //    - Same cross-application messaging challenge
-                //
-                // 3. Architecture options:
-                //    a) Event-based: battle-chain emits events, others subscribe
-                //    b) Coordinator: matchmaking relays notifications
-                //    c) Shared app: all chains run battle-chain app (current approach)
-                //
-                // Current code sends to player chains assuming battle-chain app is installed
-                // on all player chains. This needs to be documented or redesigned.
+                // Emit BattleCompleted event for cross-application subscriptions
+                // This allows prediction-chain and registry-chain to listen for battle results
+                let winner_chain = if winner_owner == p1.owner {
+                    p1.chain
+                } else {
+                    p2.chain
+                };
+
+                let loser_chain = if winner_owner == p1.owner {
+                    p2.chain
+                } else {
+                    p1.chain
+                };
+
+                let battle_chain_id = self.runtime.chain_id();
+                self.runtime.emit(
+                    "battle_events".into(),
+                    &BattleEvent::BattleCompleted {
+                        battle_chain: battle_chain_id,
+                        player1_chain: p1.chain,
+                        player2_chain: p2.chain,
+                        winner_chain,
+                        loser_chain,
+                        stake: total_stake,
+                        rounds_played: *self.state.current_round.get(),
+                    },
+                );
+
+                log::info!(
+                    "Battle completed on chain {:?}: winner {:?}",
+                    self.runtime.chain_id(),
+                    winner_owner
+                );
             }
         }
     }
@@ -935,6 +972,19 @@ impl Contract for BattleContract {
                     player1.owner, player2.owner
                 ));
                 self.state.battle_log.set(battle_log);
+
+                // Emit BattleStarted event for cross-chain subscriptions
+                let total_stake = player1.stake.saturating_add(player2.stake);
+                let battle_chain_id = self.runtime.chain_id();
+                self.runtime.emit(
+                    "battle_events".into(),
+                    &BattleEvent::BattleStarted {
+                        battle_chain: battle_chain_id,
+                        player1_chain: player1.chain,
+                        player2_chain: player2.chain,
+                        total_stake,
+                    },
+                );
 
                 log::info!(
                     "Battle initialized on chain {:?}: {:?} vs {:?}",
