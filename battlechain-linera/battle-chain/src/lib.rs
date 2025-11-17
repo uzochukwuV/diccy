@@ -60,6 +60,18 @@ pub enum BattleEvent {
         loser_chain: ChainId,
         stake: Amount,
         rounds_played: u8,
+        // Combat statistics for player 1
+        player1_damage_dealt: u64,
+        player1_damage_taken: u64,
+        player1_crits: u64,
+        player1_dodges: u64,
+        player1_highest_crit: u64,
+        // Combat statistics for player 2
+        player2_damage_dealt: u64,
+        player2_damage_taken: u64,
+        player2_crits: u64,
+        player2_dodges: u64,
+        player2_highest_crit: u64,
     },
 }
 
@@ -608,6 +620,49 @@ impl WithContractAbi for BattleContract {
     type Abi = BattleChainAbi;
 }
 
+/// Calculate combat statistics for a player from round results
+fn calculate_combat_stats(
+    round_results: &[RoundResult],
+    player_owner: &Owner,
+) -> (u64, u64, u64, u64, u64) {
+    let mut damage_dealt = 0u64;
+    let mut damage_taken = 0u64;
+    let mut crits = 0u64;
+    let mut dodges = 0u64;
+    let mut highest_crit = 0u64;
+
+    for round in round_results {
+        // Check all actions in the round
+        for actions in [&round.player1_actions, &round.player2_actions] {
+            for action in actions {
+                // Count stats where this player is the attacker
+                if &action.attacker == player_owner {
+                    if !action.was_dodged && !action.was_countered {
+                        damage_dealt += action.damage as u64;
+                    }
+                    if action.was_crit {
+                        crits += 1;
+                        if action.damage as u64 > highest_crit {
+                            highest_crit = action.damage as u64;
+                        }
+                    }
+                }
+                // Count stats where this player is the defender
+                else if &action.defender == player_owner {
+                    if !action.was_dodged && !action.was_countered {
+                        damage_taken += action.damage as u64;
+                    }
+                    if action.was_dodged {
+                        dodges += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    (damage_dealt, damage_taken, crits, dodges, highest_crit)
+}
+
 impl Contract for BattleContract {
     type Message = Message;
     type Parameters = BattleParameters;
@@ -891,6 +946,13 @@ impl Contract for BattleContract {
                     p1.chain
                 };
 
+                // Calculate combat statistics for both players
+                let round_results = self.state.round_results.get().clone();
+                let (p1_damage_dealt, p1_damage_taken, p1_crits, p1_dodges, p1_highest_crit) =
+                    calculate_combat_stats(&round_results, &p1.owner);
+                let (p2_damage_dealt, p2_damage_taken, p2_crits, p2_dodges, p2_highest_crit) =
+                    calculate_combat_stats(&round_results, &p2.owner);
+
                 let battle_chain_id = self.runtime.chain_id();
                 self.runtime.emit(
                     "battle_events".into(),
@@ -902,6 +964,16 @@ impl Contract for BattleContract {
                         loser_chain,
                         stake: total_stake,
                         rounds_played: *self.state.current_round.get(),
+                        player1_damage_dealt: p1_damage_dealt,
+                        player1_damage_taken: p1_damage_taken,
+                        player1_crits: p1_crits,
+                        player1_dodges: p1_dodges,
+                        player1_highest_crit: p1_highest_crit,
+                        player2_damage_dealt: p2_damage_dealt,
+                        player2_damage_taken: p2_damage_taken,
+                        player2_crits: p2_crits,
+                        player2_dodges: p2_dodges,
+                        player2_highest_crit: p2_highest_crit,
                     },
                 );
 

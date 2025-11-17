@@ -27,6 +27,18 @@ pub enum BattleEvent {
         loser_chain: ChainId,
         stake: Amount,
         rounds_played: u8,
+        // Combat statistics for player 1
+        player1_damage_dealt: u64,
+        player1_damage_taken: u64,
+        player1_crits: u64,
+        player1_dodges: u64,
+        player1_highest_crit: u64,
+        // Combat statistics for player 2
+        player2_damage_dealt: u64,
+        player2_damage_taken: u64,
+        player2_crits: u64,
+        player2_dodges: u64,
+        player2_highest_crit: u64,
     },
 }
 
@@ -258,23 +270,36 @@ impl RegistryState {
     }
 
     /// Update leaderboard after character stats change
-    pub fn update_leaderboard(&mut self, character_id: String) {
-        // For now, just keep a simple list
-        // TODO: Implement proper sorted leaderboard with efficient updates
+    /// Sorts by ELO rating (descending) and keeps top 100
+    pub async fn update_leaderboard(&mut self, character_id: String) -> Result<(), RegistryError> {
         let mut top = self.top_elo.get().clone();
 
         // Remove if already exists
         top.retain(|id| id != &character_id);
 
-        // Add to list (will be sorted later)
+        // Add to list
         top.push(character_id);
 
-        // Keep only top 100
-        if top.len() > 100 {
-            top.truncate(100);
+        // Fetch ELO ratings for all characters in the list
+        let mut character_elos: Vec<(String, u64)> = Vec::new();
+        for id in top.iter() {
+            if let Some(stats) = self.characters.get(id).await? {
+                character_elos.push((id.clone(), stats.elo_rating));
+            }
         }
 
-        self.top_elo.set(top);
+        // Sort by ELO rating (descending)
+        character_elos.sort_by(|a, b| b.1.cmp(&a.1));
+
+        // Keep only top 100 and extract character IDs
+        let sorted_ids: Vec<String> = character_elos
+            .into_iter()
+            .take(100)
+            .map(|(id, _)| id)
+            .collect();
+
+        self.top_elo.set(sorted_ids);
+        Ok(())
     }
 }
 
@@ -344,6 +369,18 @@ pub enum Message {
         winner_chain: ChainId,
         stake: Amount,
         rounds_played: u8,
+        // Combat statistics for player 1
+        player1_damage_dealt: u64,
+        player1_damage_taken: u64,
+        player1_crits: u64,
+        player1_dodges: u64,
+        player1_highest_crit: u64,
+        // Combat statistics for player 2
+        player2_damage_dealt: u64,
+        player2_damage_taken: u64,
+        player2_crits: u64,
+        player2_dodges: u64,
+        player2_highest_crit: u64,
     },
 
     /// Character registered
@@ -439,7 +476,7 @@ impl Contract for RegistryContract {
                 );
 
                 self.state.register_character(stats)?;
-                self.state.update_leaderboard(character_id);
+                self.state.update_leaderboard(character_id).await?;
             }
 
             Operation::UpdateCharacterStats {
@@ -472,7 +509,7 @@ impl Contract for RegistryContract {
                 );
 
                 self.state.characters.insert(&character_id, stats)?;
-                self.state.update_leaderboard(character_id);
+                self.state.update_leaderboard(character_id).await?;
             }
 
             Operation::RecordBattle {
@@ -555,6 +592,16 @@ impl Contract for RegistryContract {
                 winner_chain,
                 stake,
                 rounds_played,
+                player1_damage_dealt,
+                player1_damage_taken,
+                player1_crits,
+                player1_dodges,
+                player1_highest_crit,
+                player2_damage_dealt,
+                player2_damage_taken,
+                player2_crits,
+                player2_dodges,
+                player2_highest_crit,
             } => {
                 // Get character IDs from owner chains
                 let player1_id = self.state.owner_to_character.get(&player1_chain).await
@@ -568,6 +615,46 @@ impl Contract for RegistryContract {
                     } else {
                         p2_id.clone()
                     };
+
+                    // Get opponent ELO ratings for ELO calculation
+                    let p1_stats = self.state.characters.get(&p1_id).await.ok().flatten();
+                    let p2_stats = self.state.characters.get(&p2_id).await.ok().flatten();
+
+                    if let (Some(p1_elo_rating), Some(p2_elo_rating)) =
+                        (p1_stats.map(|s| s.elo_rating), p2_stats.map(|s| s.elo_rating)) {
+
+                        // Update player 1 stats
+                        let p1_won = winner_chain == player1_chain;
+                        let p1_earnings = if p1_won { stake } else { Amount::ZERO };
+                        let _ = self.execute_operation(Operation::UpdateCharacterStats {
+                            character_id: p1_id.clone(),
+                            won: p1_won,
+                            damage_dealt: player1_damage_dealt,
+                            damage_taken: player1_damage_taken,
+                            crits: player1_crits,
+                            dodges: player1_dodges,
+                            highest_crit: player1_highest_crit,
+                            earnings: p1_earnings,
+                            stake,
+                            opponent_elo: p2_elo_rating,
+                        }).await;
+
+                        // Update player 2 stats
+                        let p2_won = winner_chain == player2_chain;
+                        let p2_earnings = if p2_won { stake } else { Amount::ZERO };
+                        let _ = self.execute_operation(Operation::UpdateCharacterStats {
+                            character_id: p2_id.clone(),
+                            won: p2_won,
+                            damage_dealt: player2_damage_dealt,
+                            damage_taken: player2_damage_taken,
+                            crits: player2_crits,
+                            dodges: player2_dodges,
+                            highest_crit: player2_highest_crit,
+                            earnings: p2_earnings,
+                            stake,
+                            opponent_elo: p1_elo_rating,
+                        }).await;
+                    }
 
                     // Record battle
                     let _ = self.execute_operation(Operation::RecordBattle {

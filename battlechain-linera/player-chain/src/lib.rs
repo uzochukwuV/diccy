@@ -244,6 +244,13 @@ impl Contract for PlayerChainContract {
             Operation::CreateCharacter { nft_id, class } => {
                 let mut chars = self.state.characters.get().clone();
                 let new_char = CharacterNFT::new(nft_id, class, now);
+
+                // Validate character state after creation
+                if let Err(e) = new_char.validate() {
+                    log::error!("Character validation failed after creation: {}", e);
+                    panic!("Invalid character state: {}", e);
+                }
+
                 chars.push(new_char);
                 self.state.characters.set(chars);
             }
@@ -336,56 +343,73 @@ impl Contract for PlayerChainContract {
                 // Update character progression if we have a character ID
                 if !character_id.is_empty() {
                     let mut chars = self.state.characters.get().clone();
-                    let character_opt = chars.iter_mut().find(|c| c.nft_id == character_id);
+                    let mut should_remove_character = false;
 
-                    if let Some(character) = character_opt {
-                        // Mark character as no longer in battle
-                        character.in_battle = false;
+                    // Update character in a separate scope to avoid borrow conflicts
+                    {
+                        let character_opt = chars.iter_mut().find(|c| c.nft_id == character_id);
 
-                        if won {
-                            // Award XP based on rounds played
-                            let xp_reward = 100 + (rounds_played as u64 * 10);
-                            character.xp += xp_reward;
+                        if let Some(character) = character_opt {
+                            // Mark character as no longer in battle
+                            character.in_battle = false;
 
-                            // Check for level up
-                            let xp_needed = 100 * (character.level as u64);
-                            if character.xp >= xp_needed {
-                                character.level += 1;
-                                character.xp = character.xp.saturating_sub(xp_needed);
+                            if won {
+                                // Award XP based on rounds played
+                                let xp_reward = 100 + (rounds_played as u64 * 10);
+                                character.xp += xp_reward;
 
-                                // Update stats for new level
-                                character.hp_max += 10;
-                                character.current_hp = character.hp_max; // Full heal on level up
-                                character.min_damage += 1;
-                                character.max_damage += 2;
+                                // Check for level up
+                                let xp_needed = 100 * (character.level as u64);
+                                if character.xp >= xp_needed {
+                                    character.level += 1;
+                                    character.xp = character.xp.saturating_sub(xp_needed);
 
-                                log::info!(
-                                    "Character {} leveled up to level {}!",
-                                    character.nft_id,
-                                    character.level
-                                );
-                            }
-                        } else {
-                            // Lose a life (permadeath mechanic)
-                            character.lives = character.lives.saturating_sub(1);
+                                    // Update stats for new level
+                                    character.hp_max += 10;
+                                    character.current_hp = character.hp_max; // Full heal on level up
+                                    character.min_damage += 1;
+                                    character.max_damage += 2;
 
-                            if character.lives == 0 {
-                                // Character is permanently dead - remove from list
-                                log::warn!(
-                                    "Character {} has died (permadeath)!",
-                                    character.nft_id
-                                );
-
-                                // Remove character from character list
-                                chars.retain(|c| c.nft_id != character_id);
+                                    log::info!(
+                                        "Character {} leveled up to level {}!",
+                                        character.nft_id,
+                                        character.level
+                                    );
+                                }
                             } else {
-                                log::info!(
-                                    "Character {} has {} lives remaining",
-                                    character.nft_id,
-                                    character.lives
-                                );
+                                // Lose a life (permadeath mechanic)
+                                character.lives = character.lives.saturating_sub(1);
+
+                                if character.lives == 0 {
+                                    // Character is permanently dead - will be removed after validation
+                                    should_remove_character = true;
+                                    log::warn!(
+                                        "Character {} has died (permadeath)!",
+                                        character.nft_id
+                                    );
+                                } else {
+                                    log::info!(
+                                        "Character {} has {} lives remaining",
+                                        character.nft_id,
+                                        character.lives
+                                    );
+                                }
+                            }
+
+                            // Validate character state after modifications
+                            if !should_remove_character {
+                                if let Err(e) = character.validate() {
+                                    log::error!("Character validation failed after battle update: {}", e);
+                                    log::error!("Character: {:#?}", character);
+                                    panic!("Invalid character state after battle: {}", e);
+                                }
                             }
                         }
+                    } // character reference dropped here
+
+                    // Now safe to call retain() since character reference is dropped
+                    if should_remove_character {
+                        chars.retain(|c| c.nft_id != character_id);
                     }
 
                     self.state.characters.set(chars);

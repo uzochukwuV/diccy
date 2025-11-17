@@ -27,6 +27,18 @@ pub enum BattleEvent {
         loser_chain: ChainId,
         stake: Amount,
         rounds_played: u8,
+        // Combat statistics for player 1 (not used by prediction market, but needed for event compatibility)
+        player1_damage_dealt: u64,
+        player1_damage_taken: u64,
+        player1_crits: u64,
+        player1_dodges: u64,
+        player1_highest_crit: u64,
+        // Combat statistics for player 2 (not used by prediction market, but needed for event compatibility)
+        player2_damage_dealt: u64,
+        player2_damage_taken: u64,
+        player2_crits: u64,
+        player2_dodges: u64,
+        player2_highest_crit: u64,
     },
 }
 
@@ -230,6 +242,12 @@ pub enum Operation {
         bettor_chain: ChainId,
     },
 
+    /// Claim refund for cancelled market (called by bettor)
+    ClaimRefund {
+        market_id: u64,
+        bettor_chain: ChainId,
+    },
+
     /// Update configuration
     UpdateConfig {
         platform_fee_bps: u16,
@@ -286,6 +304,12 @@ pub enum PredictionError {
 
     #[error("No winnings to claim")]
     NoWinnings,
+
+    #[error("Market is not cancelled")]
+    MarketNotCancelled,
+
+    #[error("No refund available")]
+    NoRefund,
 
     #[error("View error: {0}")]
     ViewError(String),
@@ -457,7 +481,7 @@ impl Contract for PredictionContract {
 
                 self.state.markets.insert(&market_id, market)?;
 
-                // TODO: Issue refunds to all bettors
+                log::info!("Market {} cancelled. Bettors can claim refunds via ClaimRefund operation.", market_id);
             }
 
             Operation::ClaimWinnings { market_id, bettor_chain } => {
@@ -489,6 +513,45 @@ impl Contract for PredictionContract {
 
                 // Remove bet after claiming (prevent double-claim)
                 self.state.bets.remove(&(market_id, bettor_chain))?;
+            }
+
+            Operation::ClaimRefund { market_id, bettor_chain } => {
+                let market = self.state.markets.get(&market_id).await?
+                    .ok_or(PredictionError::MarketNotFound)?;
+
+                if market.status != MarketStatus::Cancelled {
+                    return Err(PredictionError::MarketNotCancelled.into());
+                }
+
+                let bet = self.state.bets.get(&(market_id, bettor_chain)).await?
+                    .ok_or(PredictionError::BetNotFound)?;
+
+                // Refund the full bet amount
+                let refund_amount = bet.amount;
+
+                if refund_amount.is_zero() {
+                    return Err(PredictionError::NoRefund.into());
+                }
+
+                // Send refund message
+                self.runtime
+                    .prepare_message(Message::WinningsPayout {
+                        market_id,
+                        bettor: bet.bettor,
+                        amount: refund_amount,
+                    })
+                    .with_authentication()
+                    .send_to(bettor_chain);
+
+                // Remove bet after claiming (prevent double-claim)
+                self.state.bets.remove(&(market_id, bettor_chain))?;
+
+                log::info!(
+                    "Refund of {:?} issued to {:?} for cancelled market {}",
+                    refund_amount,
+                    bettor_chain,
+                    market_id
+                );
             }
 
             Operation::UpdateConfig { platform_fee_bps, treasury_owner } => {

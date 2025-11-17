@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use linera_sdk::linera_base_types::{Account, AccountOwner, Amount, ChainId, Timestamp};
+use linera_sdk::linera_base_types::{AccountOwner, Amount, ChainId, Timestamp};
 
 // Type alias for compatibility
 pub type Owner = AccountOwner;
@@ -168,6 +168,110 @@ impl CharacterNFT {
             self.lives -= 1;
         }
         self.current_hp = self.hp_max; // restore HP
+    }
+
+    /// Validate character state consistency
+    /// Returns Ok(()) if valid, Err(String) with error message if invalid
+    pub fn validate(&self) -> Result<(), String> {
+        // HP bounds
+        if self.current_hp > self.hp_max {
+            return Err(format!(
+                "Invalid HP: current_hp ({}) exceeds hp_max ({})",
+                self.current_hp, self.hp_max
+            ));
+        }
+
+        if self.hp_max == 0 {
+            return Err("Invalid HP: hp_max cannot be zero".to_string());
+        }
+
+        // Lives bounds
+        if self.lives > 3 {
+            return Err(format!(
+                "Invalid lives: {} (must be 0-3)",
+                self.lives
+            ));
+        }
+
+        // Level bounds
+        if self.level == 0 {
+            return Err("Invalid level: must be at least 1".to_string());
+        }
+
+        if self.level > 1000 {
+            return Err(format!(
+                "Invalid level: {} exceeds maximum (1000)",
+                self.level
+            ));
+        }
+
+        // Damage bounds
+        if self.min_damage > self.max_damage {
+            return Err(format!(
+                "Invalid damage: min_damage ({}) exceeds max_damage ({})",
+                self.min_damage, self.max_damage
+            ));
+        }
+
+        if self.max_damage == 0 {
+            return Err("Invalid damage: max_damage cannot be zero".to_string());
+        }
+
+        // Crit chance bounds (max 100%)
+        if self.crit_chance > 10000 {
+            return Err(format!(
+                "Invalid crit_chance: {} exceeds 10000 (100%)",
+                self.crit_chance
+            ));
+        }
+
+        // Crit multiplier bounds (reasonable range 1.5x - 5.0x)
+        if self.crit_multiplier < 15000 || self.crit_multiplier > 50000 {
+            return Err(format!(
+                "Invalid crit_multiplier: {} (must be 15000-50000 / 1.5x-5.0x)",
+                self.crit_multiplier
+            ));
+        }
+
+        // Dodge chance bounds (max 80%)
+        if self.dodge_chance > 8000 {
+            return Err(format!(
+                "Invalid dodge_chance: {} exceeds 8000 (80%)",
+                self.dodge_chance
+            ));
+        }
+
+        // Rarity bounds
+        if self.rarity == 0 || self.rarity > 5 {
+            return Err(format!(
+                "Invalid rarity: {} (must be 1-5)",
+                self.rarity
+            ));
+        }
+
+        // Trait modifier bounds (max +/- 200%)
+        if self.attack_bps < -20000 || self.attack_bps > 20000 {
+            return Err(format!(
+                "Invalid attack_bps: {} (must be -20000 to 20000)",
+                self.attack_bps
+            ));
+        }
+
+        if self.defense_bps < -20000 || self.defense_bps > 20000 {
+            return Err(format!(
+                "Invalid defense_bps: {} (must be -20000 to 20000)",
+                self.defense_bps
+            ));
+        }
+
+        if self.crit_bps < -20000 || self.crit_bps > 20000 {
+            return Err(format!(
+                "Invalid crit_bps: {} (must be -20000 to 20000)",
+                self.crit_bps
+            ));
+        }
+
+        Ok(())
     }
 }
 
