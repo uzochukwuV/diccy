@@ -201,6 +201,15 @@ pub struct PredictionState {
     /// Treasury owner for platform fees
     pub treasury_owner: RegisterView<Option<Owner>>,
 
+    /// SECURITY: Track known battle chains (for message authentication)
+    pub known_battle_chains: MapView<ChainId, bool>,
+
+    /// SECURITY: Admin owner (for pause functionality)
+    pub admin: RegisterView<Owner>,
+
+    /// SECURITY: Paused state
+    pub paused: RegisterView<bool>,
+
     /// Timestamps
     pub created_at: RegisterView<Timestamp>,
 }

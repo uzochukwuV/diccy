@@ -250,6 +250,15 @@ pub struct RegistryState {
     /// Top characters by ELO (limited to top 100)
     pub top_elo: RegisterView<Vec<String>>, // Character IDs sorted by ELO
 
+    /// SECURITY: Track known battle chains (for message authentication)
+    pub known_battle_chains: MapView<ChainId, bool>,
+
+    /// SECURITY: Admin owner (for pause functionality)
+    pub admin: RegisterView<Owner>,
+
+    /// SECURITY: Paused state
+    pub paused: RegisterView<bool>,
+
     /// Timestamps
     pub created_at: RegisterView<Timestamp>,
 }
@@ -356,6 +365,15 @@ pub enum Operation {
         battle_chain_id: ChainId,
         battle_app_id: linera_sdk::linera_base_types::ApplicationId,
     },
+
+    /// SECURITY: Pause contract (admin only)
+    Pause,
+
+    /// SECURITY: Unpause contract (admin only)
+    Unpause,
+
+    /// SECURITY: Transfer admin rights (admin only)
+    TransferAdmin { new_admin: Owner },
 }
 
 /// Messages
@@ -401,6 +419,15 @@ pub enum RegistryError {
 
     #[error("Battle not found")]
     BattleNotFound,
+
+    #[error("Unauthorized message sender: {0:?}")]
+    UnauthorizedSender(ChainId),
+
+    #[error("Contract is paused")]
+    ContractPaused,
+
+    #[error("Not authorized: only admin can perform this operation")]
+    NotAuthorized,
 
     #[error("View error: {0}")]
     ViewError(String),
@@ -450,6 +477,18 @@ impl Contract for RegistryContract {
     }
 
     async fn execute_operation(&mut self, operation: Operation) -> Self::Response {
+        // SECURITY: Check if contract is paused (skip for admin operations)
+        match operation {
+            Operation::Pause | Operation::Unpause | Operation::TransferAdmin { .. } => {
+                // Admin operations allowed even when paused
+            }
+            _ => {
+                if *self.state.paused.get() {
+                    return Err(RegistryError::ContractPaused);
+                }
+            }
+        }
+
         match operation {
             Operation::RegisterCharacter {
                 character_id,
@@ -572,11 +611,50 @@ impl Contract for RegistryContract {
                     "battle_events".into(),
                 );
 
+                // SECURITY: Track this battle chain for message authentication
+                self.state.known_battle_chains.insert(&battle_chain_id, true)?;
+
                 log::info!(
                     "Registry subscribed to battle events from chain {:?}, app {:?}",
                     battle_chain_id,
                     battle_app_id
                 );
+            }
+
+            Operation::Pause => {
+                // SECURITY: Only admin can pause
+                let caller = self.runtime.authenticated_signer()
+                    .ok_or(RegistryError::NotAuthorized)?;
+                let admin = *self.state.admin.get();
+                if caller != admin {
+                    return Err(RegistryError::NotAuthorized);
+                }
+                self.state.paused.set(true);
+                log::warn!("Registry paused by admin: {:?}", admin);
+            }
+
+            Operation::Unpause => {
+                // SECURITY: Only admin can unpause
+                let caller = self.runtime.authenticated_signer()
+                    .ok_or(RegistryError::NotAuthorized)?;
+                let admin = *self.state.admin.get();
+                if caller != admin {
+                    return Err(RegistryError::NotAuthorized);
+                }
+                self.state.paused.set(false);
+                log::info!("Registry unpaused by admin: {:?}", admin);
+            }
+
+            Operation::TransferAdmin { new_admin } => {
+                // SECURITY: Only current admin can transfer admin rights
+                let caller = self.runtime.authenticated_signer()
+                    .ok_or(RegistryError::NotAuthorized)?;
+                let admin = *self.state.admin.get();
+                if caller != admin {
+                    return Err(RegistryError::NotAuthorized);
+                }
+                self.state.admin.set(new_admin);
+                log::info!("Registry admin transferred from {:?} to {:?}", admin, new_admin);
             }
         }
 
@@ -603,6 +681,29 @@ impl Contract for RegistryContract {
                 player2_dodges,
                 player2_highest_crit,
             } => {
+                // SECURITY: Validate message sender is a known battle chain
+                let sender_chain = match self.runtime.message_origin_chain_id() {
+                    Some(chain) => chain,
+                    None => {
+                        log::error!("BattleCompleted message has no origin chain");
+                        return;
+                    }
+                };
+
+                // Check if this is a known battle chain
+                match self.state.known_battle_chains.get(&sender_chain).await {
+                    Ok(Some(true)) => {
+                        // Valid battle chain, continue processing
+                    }
+                    _ => {
+                        log::error!(
+                            "SECURITY: Unauthorized BattleCompleted from unknown chain: {:?}",
+                            sender_chain
+                        );
+                        return; // Reject message from unknown battle chain
+                    }
+                }
+
                 // Get character IDs from owner chains
                 let player1_id = self.state.owner_to_character.get(&player1_chain).await
                     .ok().flatten();
