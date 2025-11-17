@@ -268,6 +268,15 @@ pub enum Operation {
         battle_chain_id: ChainId,
         battle_app_id: linera_sdk::linera_base_types::ApplicationId,
     },
+
+    /// SECURITY: Pause contract (admin only)
+    Pause { reason: String },
+
+    /// SECURITY: Unpause contract (admin only)
+    Unpause,
+
+    /// SECURITY: Transfer admin rights (admin only)
+    TransferAdmin { new_admin: Owner },
 }
 
 /// Messages
@@ -320,6 +329,15 @@ pub enum PredictionError {
     #[error("No refund available")]
     NoRefund,
 
+    #[error("Unauthorized message sender: {0:?}")]
+    UnauthorizedSender(ChainId),
+
+    #[error("Contract is paused")]
+    ContractPaused,
+
+    #[error("Not authorized: only admin can perform this operation")]
+    NotAuthorized,
+
     #[error("View error: {0}")]
     ViewError(String),
 }
@@ -365,11 +383,70 @@ impl Contract for PredictionContract {
         self.state.total_bets.set(0);
         self.state.total_volume.set(Amount::ZERO);
         self.state.platform_fee_bps.set(platform_fee_bps);
-        self.state.treasury_owner.set(Some(treasury_owner));
+        self.state.treasury_owner.set(Some(treasury_owner.clone()));
         self.state.created_at.set(now);
+
+        // SECURITY: Initialize admin as treasury owner
+        self.state.admin.set(treasury_owner);
+        self.state.paused.set(false);
     }
 
     async fn execute_operation(&mut self, operation: Operation) -> Self::Response {
+        // SECURITY: Handle admin operations first (they work even when paused)
+        match &operation {
+            Operation::Pause { reason } => {
+                // Only admin can pause
+                let caller = self.runtime.authenticated_signer()
+                    .ok_or(PredictionError::NotAuthorized)?;
+                let admin = *self.state.admin.get();
+
+                if caller != admin {
+                    return Err(PredictionError::NotAuthorized);
+                }
+
+                self.state.paused.set(true);
+                log::info!("SECURITY: Contract paused by admin. Reason: {}", reason);
+                return Ok(());
+            }
+
+            Operation::Unpause => {
+                // Only admin can unpause
+                let caller = self.runtime.authenticated_signer()
+                    .ok_or(PredictionError::NotAuthorized)?;
+                let admin = *self.state.admin.get();
+
+                if caller != admin {
+                    return Err(PredictionError::NotAuthorized);
+                }
+
+                self.state.paused.set(false);
+                log::info!("SECURITY: Contract unpaused by admin");
+                return Ok(());
+            }
+
+            Operation::TransferAdmin { new_admin } => {
+                // Only current admin can transfer
+                let caller = self.runtime.authenticated_signer()
+                    .ok_or(PredictionError::NotAuthorized)?;
+                let admin = *self.state.admin.get();
+
+                if caller != admin {
+                    return Err(PredictionError::NotAuthorized);
+                }
+
+                self.state.admin.set(*new_admin);
+                log::info!("SECURITY: Admin transferred to {:?}", new_admin);
+                return Ok(());
+            }
+
+            _ => {
+                // For all other operations, check if paused
+                if *self.state.paused.get() {
+                    return Err(PredictionError::ContractPaused);
+                }
+            }
+        }
+
         match operation {
             Operation::CreateMarket { battle_chain, player1_chain, player2_chain } => {
                 let market_id = *self.state.next_market_id.get();
@@ -576,11 +653,19 @@ impl Contract for PredictionContract {
                     "battle_events".into(),
                 );
 
+                // SECURITY: Track this battle chain as known for message authentication
+                self.state.known_battle_chains.insert(&battle_chain_id, true)?;
+
                 log::info!(
                     "Subscribed to battle events from chain {:?}, app {:?}",
                     battle_chain_id,
                     battle_app_id
                 );
+            }
+
+            // Admin operations already handled above
+            Operation::Pause { .. } | Operation::Unpause | Operation::TransferAdmin { .. } => {
+                unreachable!("Admin operations handled at start of execute_operation")
             }
         }
 
@@ -592,6 +677,29 @@ impl Contract for PredictionContract {
         // Events from battle-chain arrive here after subscription via SubscribeToBattleEvents
         match message {
             Message::BattleStarted { battle_chain } => {
+                // SECURITY: Validate message sender is a known battle chain
+                let sender_chain = match self.runtime.message_origin_chain_id() {
+                    Some(chain) => chain,
+                    None => {
+                        log::error!("BattleStarted message has no origin chain");
+                        return;
+                    }
+                };
+
+                // Check if this is a known battle chain
+                match self.state.known_battle_chains.get(&sender_chain).await {
+                    Ok(Some(true)) => {
+                        // Valid battle chain, continue processing
+                    }
+                    _ => {
+                        log::error!(
+                            "SECURITY: Unauthorized BattleStarted from unknown chain: {:?}",
+                            sender_chain
+                        );
+                        return; // Reject message from unknown battle chain
+                    }
+                }
+
                 // Event: BattleEvent::BattleStarted received
                 // Close betting for this battle's market
                 if let Some(market_id) = self.state.battle_to_market.get(&battle_chain).await.ok().flatten() {
@@ -601,6 +709,29 @@ impl Contract for PredictionContract {
             }
 
             Message::BattleEnded { battle_chain, winner_chain } => {
+                // SECURITY: Validate message sender is a known battle chain
+                let sender_chain = match self.runtime.message_origin_chain_id() {
+                    Some(chain) => chain,
+                    None => {
+                        log::error!("BattleEnded message has no origin chain");
+                        return;
+                    }
+                };
+
+                // Check if this is a known battle chain
+                match self.state.known_battle_chains.get(&sender_chain).await {
+                    Ok(Some(true)) => {
+                        // Valid battle chain, continue processing
+                    }
+                    _ => {
+                        log::error!(
+                            "SECURITY: Unauthorized BattleEnded from unknown chain: {:?}",
+                            sender_chain
+                        );
+                        return; // Reject message from unknown battle chain
+                    }
+                }
+
                 // Event: BattleEvent::BattleCompleted received
                 // Settle the market with the battle result
                 if let Some(market_id) = self.state.battle_to_market.get(&battle_chain).await.ok().flatten() {
