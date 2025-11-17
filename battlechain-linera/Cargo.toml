@@ -1,0 +1,21 @@
+[workspace]
+resolver = "2"
+members = [
+    "battle-chain",
+    "battle-token",
+    "matchmaking-chain",
+    "player-chain",
+    "prediction-chain",
+    "registry-chain",
+    "shared-types",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true

@@ -301,9 +301,9 @@ impl Contract for PlayerChainContract {
 
             Message::BattleResult {
                 winner,
-                loser,
+                loser: _,
                 winner_payout,
-                rounds_played: _,
+                rounds_played,
             } => {
                 // Determine if this player won or lost
                 let player_owner = self.runtime.authenticated_signer();
