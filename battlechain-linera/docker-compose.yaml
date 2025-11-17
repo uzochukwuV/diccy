@@ -1,0 +1,65 @@
+version: '3.8'
+
+services:
+  battlechain:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: battlechain-linera
+    ports:
+      # Linera web service
+      - "9000:9000"
+      # Faucet service
+      - "19100:19100"
+      # Shard 0
+      - "19000:19000"
+      # Shard 1
+      - "19001:19001"
+      # Shard 2
+      - "19002:19002"
+      # Shard 3
+      - "19003:19003"
+    volumes:
+      # Mount source code for development
+      - .:/app
+      # Persist Linera data
+      - linera-data:/root/.config/linera
+      - linera-storage:/tmp/linera
+    environment:
+      - RUST_LOG=info
+      - RUST_BACKTRACE=1
+    command: /app/run.bash
+    stdin_open: true
+    tty: true
+    networks:
+      - battlechain-net
+
+  # Optional: GraphQL service for querying contracts
+  graphql:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: battlechain-graphql
+    ports:
+      - "8080:8080"
+    volumes:
+      - .:/app
+      - linera-data:/root/.config/linera
+    environment:
+      - RUST_LOG=info
+    command: >
+      sh -c "echo 'GraphQL service ready. Configure with linera service after network is up.' && sleep infinity"
+    depends_on:
+      - battlechain
+    networks:
+      - battlechain-net
+
+volumes:
+  linera-data:
+    driver: local
+  linera-storage:
+    driver: local
+
+networks:
+  battlechain-net:
+    driver: bridge

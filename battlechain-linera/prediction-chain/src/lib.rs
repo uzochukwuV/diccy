@@ -9,6 +9,39 @@ use linera_sdk::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+// Battle event types for subscription (defined inline to avoid dependencies)
+/// Events emitted by battle-chain
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum BattleEvent {
+    BattleStarted {
+        battle_chain: ChainId,
+        player1_chain: ChainId,
+        player2_chain: ChainId,
+        total_stake: Amount,
+    },
+    BattleCompleted {
+        battle_chain: ChainId,
+        player1_chain: ChainId,
+        player2_chain: ChainId,
+        winner_chain: ChainId,
+        loser_chain: ChainId,
+        stake: Amount,
+        rounds_played: u8,
+        // Combat statistics for player 1 (not used by prediction market, but needed for event compatibility)
+        player1_damage_dealt: u64,
+        player1_damage_taken: u64,
+        player1_crits: u64,
+        player1_dodges: u64,
+        player1_highest_crit: u64,
+        // Combat statistics for player 2 (not used by prediction market, but needed for event compatibility)
+        player2_damage_dealt: u64,
+        player2_damage_taken: u64,
+        player2_crits: u64,
+        player2_dodges: u64,
+        player2_highest_crit: u64,
+    },
+}
+
 /// Prediction Market Chain Application ABI
 pub struct PredictionAbi;
 
@@ -104,18 +137,36 @@ impl Market {
     }
 
     /// Calculate winnings for a bet
+    /// Formula: (bet_amount / total_winning_side_bets) * total_pool * (1 - platform_fee)
     pub fn calculate_winnings(&self, bet: &Bet) -> Amount {
         if self.winner != Some(bet.side) {
             return Amount::ZERO;
         }
 
-        // Winnings = bet_amount * odds / 10000
-        // Since Amount doesn't support direct arithmetic, we work with smaller multipliers
-        // For simplicity, just return the bet amount for now
-        // TODO: Implement proper fixed-point arithmetic for odds-based payouts
+        // Get total bets for the winning side
+        let winning_side_total = match bet.side {
+            BetSide::Player1 => self.total_player1_bets,
+            BetSide::Player2 => self.total_player2_bets,
+        };
 
-        // For now, return 2x the bet for winners (simpler than complex odds calculation)
-        bet.amount.saturating_add(bet.amount)
+        // If no bets on winning side (shouldn't happen), return zero
+        if winning_side_total.is_zero() {
+            return Amount::ZERO;
+        }
+
+        // Convert to u128 for fixed-point arithmetic
+        let total_pool_u128: u128 = self.total_pool.try_into().unwrap_or(0);
+        let bet_amount_u128: u128 = bet.amount.try_into().unwrap_or(0);
+        let winning_total_u128: u128 = winning_side_total.try_into().unwrap_or(1);
+
+        // Calculate platform fee: (total_pool * fee_bps) / 10000
+        let fee_amount = (total_pool_u128 * self.platform_fee_bps as u128) / 10000;
+        let pool_after_fee = total_pool_u128.saturating_sub(fee_amount);
+
+        // Calculate proportional winnings: (bet_amount * pool_after_fee) / winning_total
+        let winnings_u128 = (bet_amount_u128 * pool_after_fee) / winning_total_u128;
+
+        Amount::from_attos(winnings_u128)
     }
 }
 
@@ -149,6 +200,15 @@ pub struct PredictionState {
 
     /// Treasury owner for platform fees
     pub treasury_owner: RegisterView<Option<Owner>>,
+
+    /// SECURITY: Track known battle chains (for message authentication)
+    pub known_battle_chains: MapView<ChainId, bool>,
+
+    /// SECURITY: Admin owner (for pause functionality)
+    pub admin: RegisterView<Owner>,
+
+    /// SECURITY: Paused state
+    pub paused: RegisterView<bool>,
 
     /// Timestamps
     pub created_at: RegisterView<Timestamp>,
@@ -191,11 +251,32 @@ pub enum Operation {
         bettor_chain: ChainId,
     },
 
+    /// Claim refund for cancelled market (called by bettor)
+    ClaimRefund {
+        market_id: u64,
+        bettor_chain: ChainId,
+    },
+
     /// Update configuration
     UpdateConfig {
         platform_fee_bps: u16,
         treasury_owner: Owner,
     },
+
+    /// Subscribe to battle events from a battle chain
+    SubscribeToBattleEvents {
+        battle_chain_id: ChainId,
+        battle_app_id: linera_sdk::linera_base_types::ApplicationId,
+    },
+
+    /// SECURITY: Pause contract (admin only)
+    Pause { reason: String },
+
+    /// SECURITY: Unpause contract (admin only)
+    Unpause,
+
+    /// SECURITY: Transfer admin rights (admin only)
+    TransferAdmin { new_admin: Owner },
 }
 
 /// Messages
@@ -242,6 +323,21 @@ pub enum PredictionError {
     #[error("No winnings to claim")]
     NoWinnings,
 
+    #[error("Market is not cancelled")]
+    MarketNotCancelled,
+
+    #[error("No refund available")]
+    NoRefund,
+
+    #[error("Unauthorized message sender: {0:?}")]
+    UnauthorizedSender(ChainId),
+
+    #[error("Contract is paused")]
+    ContractPaused,
+
+    #[error("Not authorized: only admin can perform this operation")]
+    NotAuthorized,
+
     #[error("View error: {0}")]
     ViewError(String),
 }
@@ -287,11 +383,70 @@ impl Contract for PredictionContract {
         self.state.total_bets.set(0);
         self.state.total_volume.set(Amount::ZERO);
         self.state.platform_fee_bps.set(platform_fee_bps);
-        self.state.treasury_owner.set(Some(treasury_owner));
+        self.state.treasury_owner.set(Some(treasury_owner.clone()));
         self.state.created_at.set(now);
+
+        // SECURITY: Initialize admin as treasury owner
+        self.state.admin.set(treasury_owner);
+        self.state.paused.set(false);
     }
 
     async fn execute_operation(&mut self, operation: Operation) -> Self::Response {
+        // SECURITY: Handle admin operations first (they work even when paused)
+        match &operation {
+            Operation::Pause { reason } => {
+                // Only admin can pause
+                let caller = self.runtime.authenticated_signer()
+                    .ok_or(PredictionError::NotAuthorized)?;
+                let admin = *self.state.admin.get();
+
+                if caller != admin {
+                    return Err(PredictionError::NotAuthorized);
+                }
+
+                self.state.paused.set(true);
+                log::info!("SECURITY: Contract paused by admin. Reason: {}", reason);
+                return Ok(());
+            }
+
+            Operation::Unpause => {
+                // Only admin can unpause
+                let caller = self.runtime.authenticated_signer()
+                    .ok_or(PredictionError::NotAuthorized)?;
+                let admin = *self.state.admin.get();
+
+                if caller != admin {
+                    return Err(PredictionError::NotAuthorized);
+                }
+
+                self.state.paused.set(false);
+                log::info!("SECURITY: Contract unpaused by admin");
+                return Ok(());
+            }
+
+            Operation::TransferAdmin { new_admin } => {
+                // Only current admin can transfer
+                let caller = self.runtime.authenticated_signer()
+                    .ok_or(PredictionError::NotAuthorized)?;
+                let admin = *self.state.admin.get();
+
+                if caller != admin {
+                    return Err(PredictionError::NotAuthorized);
+                }
+
+                self.state.admin.set(*new_admin);
+                log::info!("SECURITY: Admin transferred to {:?}", new_admin);
+                return Ok(());
+            }
+
+            _ => {
+                // For all other operations, check if paused
+                if *self.state.paused.get() {
+                    return Err(PredictionError::ContractPaused);
+                }
+            }
+        }
+
         match operation {
             Operation::CreateMarket { battle_chain, player1_chain, player2_chain } => {
                 let market_id = *self.state.next_market_id.get();
@@ -412,7 +567,7 @@ impl Contract for PredictionContract {
 
                 self.state.markets.insert(&market_id, market)?;
 
-                // TODO: Issue refunds to all bettors
+                log::info!("Market {} cancelled. Bettors can claim refunds via ClaimRefund operation.", market_id);
             }
 
             Operation::ClaimWinnings { market_id, bettor_chain } => {
@@ -446,9 +601,71 @@ impl Contract for PredictionContract {
                 self.state.bets.remove(&(market_id, bettor_chain))?;
             }
 
+            Operation::ClaimRefund { market_id, bettor_chain } => {
+                let market = self.state.markets.get(&market_id).await?
+                    .ok_or(PredictionError::MarketNotFound)?;
+
+                if market.status != MarketStatus::Cancelled {
+                    return Err(PredictionError::MarketNotCancelled.into());
+                }
+
+                let bet = self.state.bets.get(&(market_id, bettor_chain)).await?
+                    .ok_or(PredictionError::BetNotFound)?;
+
+                // Refund the full bet amount
+                let refund_amount = bet.amount;
+
+                if refund_amount.is_zero() {
+                    return Err(PredictionError::NoRefund.into());
+                }
+
+                // Send refund message
+                self.runtime
+                    .prepare_message(Message::WinningsPayout {
+                        market_id,
+                        bettor: bet.bettor,
+                        amount: refund_amount,
+                    })
+                    .with_authentication()
+                    .send_to(bettor_chain);
+
+                // Remove bet after claiming (prevent double-claim)
+                self.state.bets.remove(&(market_id, bettor_chain))?;
+
+                log::info!(
+                    "Refund of {:?} issued to {:?} for cancelled market {}",
+                    refund_amount,
+                    bettor_chain,
+                    market_id
+                );
+            }
+
             Operation::UpdateConfig { platform_fee_bps, treasury_owner } => {
                 self.state.platform_fee_bps.set(platform_fee_bps);
                 self.state.treasury_owner.set(Some(treasury_owner));
+            }
+
+            Operation::SubscribeToBattleEvents { battle_chain_id, battle_app_id } => {
+                // Subscribe to battle events from the specified battle chain
+                self.runtime.subscribe_to_events(
+                    battle_chain_id,
+                    battle_app_id,
+                    "battle_events".into(),
+                );
+
+                // SECURITY: Track this battle chain as known for message authentication
+                self.state.known_battle_chains.insert(&battle_chain_id, true)?;
+
+                log::info!(
+                    "Subscribed to battle events from chain {:?}, app {:?}",
+                    battle_chain_id,
+                    battle_app_id
+                );
+            }
+
+            // Admin operations already handled above
+            Operation::Pause { .. } | Operation::Unpause | Operation::TransferAdmin { .. } => {
+                unreachable!("Admin operations handled at start of execute_operation")
             }
         }
 
@@ -456,16 +673,67 @@ impl Contract for PredictionContract {
     }
 
     async fn execute_message(&mut self, message: Message) {
+        // NOTE: This handler processes both direct messages and subscribed events
+        // Events from battle-chain arrive here after subscription via SubscribeToBattleEvents
         match message {
             Message::BattleStarted { battle_chain } => {
-                // Find market for this battle and close it
+                // SECURITY: Validate message sender is a known battle chain
+                let sender_chain = match self.runtime.message_origin_chain_id() {
+                    Some(chain) => chain,
+                    None => {
+                        log::error!("BattleStarted message has no origin chain");
+                        return;
+                    }
+                };
+
+                // Check if this is a known battle chain
+                match self.state.known_battle_chains.get(&sender_chain).await {
+                    Ok(Some(true)) => {
+                        // Valid battle chain, continue processing
+                    }
+                    _ => {
+                        log::error!(
+                            "SECURITY: Unauthorized BattleStarted from unknown chain: {:?}",
+                            sender_chain
+                        );
+                        return; // Reject message from unknown battle chain
+                    }
+                }
+
+                // Event: BattleEvent::BattleStarted received
+                // Close betting for this battle's market
                 if let Some(market_id) = self.state.battle_to_market.get(&battle_chain).await.ok().flatten() {
                     let _ = self.execute_operation(Operation::CloseMarket { market_id }).await;
+                    log::info!("Closed market {} for battle {:?}", market_id, battle_chain);
                 }
             }
 
             Message::BattleEnded { battle_chain, winner_chain } => {
-                // Find market and determine winner
+                // SECURITY: Validate message sender is a known battle chain
+                let sender_chain = match self.runtime.message_origin_chain_id() {
+                    Some(chain) => chain,
+                    None => {
+                        log::error!("BattleEnded message has no origin chain");
+                        return;
+                    }
+                };
+
+                // Check if this is a known battle chain
+                match self.state.known_battle_chains.get(&sender_chain).await {
+                    Ok(Some(true)) => {
+                        // Valid battle chain, continue processing
+                    }
+                    _ => {
+                        log::error!(
+                            "SECURITY: Unauthorized BattleEnded from unknown chain: {:?}",
+                            sender_chain
+                        );
+                        return; // Reject message from unknown battle chain
+                    }
+                }
+
+                // Event: BattleEvent::BattleCompleted received
+                // Settle the market with the battle result
                 if let Some(market_id) = self.state.battle_to_market.get(&battle_chain).await.ok().flatten() {
                     if let Some(market) = self.state.markets.get(&market_id).await.ok().flatten() {
                         let winner = if winner_chain == market.player1_chain {
@@ -475,6 +743,7 @@ impl Contract for PredictionContract {
                         };
 
                         let _ = self.execute_operation(Operation::SettleMarket { market_id, winner }).await;
+                        log::info!("Settled market {} for battle {:?}, winner: {:?}", market_id, battle_chain, winner);
                     }
                 }
             }

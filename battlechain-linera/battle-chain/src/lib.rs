@@ -12,6 +12,21 @@ use linera_sdk::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+// Battle Token ABI for cross-application calls
+// Defined inline to avoid circular dependencies (battle-token is cdylib)
+pub struct BattleTokenAbi;
+
+impl ContractAbi for BattleTokenAbi {
+    type Operation = BattleTokenOperation;
+    type Response = ();
+}
+
+/// Battle token operations (subset needed for calls)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum BattleTokenOperation {
+    Transfer { to: Owner, amount: Amount },
+}
+
 /// Battle Chain Application ABI
 pub struct BattleChainAbi;
 
@@ -23,6 +38,41 @@ impl ContractAbi for BattleChainAbi {
 impl ServiceAbi for BattleChainAbi {
     type Query = Request;
     type QueryResponse = Response;
+}
+
+/// Event values emitted by battle-chain for cross-chain notifications
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum BattleEvent {
+    /// Battle started - emitted when battle begins
+    BattleStarted {
+        battle_chain: ChainId,
+        player1_chain: ChainId,
+        player2_chain: ChainId,
+        total_stake: Amount,
+    },
+
+    /// Battle completed - emitted when battle finishes
+    BattleCompleted {
+        battle_chain: ChainId,
+        player1_chain: ChainId,
+        player2_chain: ChainId,
+        winner_chain: ChainId,
+        loser_chain: ChainId,
+        stake: Amount,
+        rounds_played: u8,
+        // Combat statistics for player 1
+        player1_damage_dealt: u64,
+        player1_damage_taken: u64,
+        player1_crits: u64,
+        player1_dodges: u64,
+        player1_highest_crit: u64,
+        // Combat statistics for player 2
+        player2_damage_dealt: u64,
+        player2_damage_taken: u64,
+        player2_crits: u64,
+        player2_dodges: u64,
+        player2_highest_crit: u64,
+    },
 }
 
 /// Battle status
@@ -163,6 +213,9 @@ pub struct BattleState {
 
     /// Round results history
     pub round_results: RegisterView<Vec<RoundResult>>,
+
+    /// Battle log for tracking events
+    pub battle_log: RegisterView<Vec<String>>,
 
     /// Randomness counter for generating unique seeds per action
     pub random_counter: RegisterView<u64>,
@@ -469,9 +522,20 @@ pub enum Operation {
     FinalizeBattle,
 }
 
-/// Messages sent from Battle chain
+/// Messages sent TO and FROM Battle chain
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Message {
+    /// Initialize battle after auto-deployment (FIRST message received)
+    /// This triggers automatic deployment of battle application to new chain
+    Initialize {
+        player1: BattleParticipant,
+        player2: BattleParticipant,
+        matchmaking_chain: ChainId,
+        battle_token_app: ApplicationId,
+        platform_fee_bps: u16,
+        treasury_owner: Owner,
+    },
+
     /// Notify player of battle result
     BattleResult {
         winner: Owner,
@@ -534,6 +598,21 @@ pub enum BattleError {
     #[error("Player defeated")]
     PlayerDefeated,
 
+    #[error("Invalid stake: {0}")]
+    InvalidStake(String),
+
+    #[error("Invalid platform fee: {0} bps (must be 0-10000)")]
+    InvalidPlatformFee(u16),
+
+    #[error("Invalid max rounds: {0} (must be 1-100)")]
+    InvalidMaxRounds(u8),
+
+    #[error("Unauthorized message sender")]
+    UnauthorizedSender,
+
+    #[error("Contract is paused")]
+    ContractPaused,
+
     #[error("View error: {0}")]
     ViewError(String),
 }
@@ -556,11 +635,94 @@ impl WithContractAbi for BattleContract {
     type Abi = BattleChainAbi;
 }
 
+/// Calculate combat statistics for a player from round results
+fn calculate_combat_stats(
+    round_results: &[RoundResult],
+    player_owner: &Owner,
+) -> (u64, u64, u64, u64, u64) {
+    let mut damage_dealt = 0u64;
+    let mut damage_taken = 0u64;
+    let mut crits = 0u64;
+    let mut dodges = 0u64;
+    let mut highest_crit = 0u64;
+
+    for round in round_results {
+        // Check all actions in the round
+        for actions in [&round.player1_actions, &round.player2_actions] {
+            for action in actions {
+                // Count stats where this player is the attacker
+                if &action.attacker == player_owner {
+                    if !action.was_dodged && !action.was_countered {
+                        damage_dealt += action.damage as u64;
+                    }
+                    if action.was_crit {
+                        crits += 1;
+                        if action.damage as u64 > highest_crit {
+                            highest_crit = action.damage as u64;
+                        }
+                    }
+                }
+                // Count stats where this player is the defender
+                else if &action.defender == player_owner {
+                    if !action.was_dodged && !action.was_countered {
+                        damage_taken += action.damage as u64;
+                    }
+                    if action.was_dodged {
+                        dodges += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    (damage_dealt, damage_taken, crits, dodges, highest_crit)
+}
+
+/// Validation functions for security
+
+/// Validate stake amount
+fn validate_stake(amount: Amount) -> Result<(), BattleError> {
+    const MIN_STAKE: u128 = 1_000_000; // 0.001 BATTLE tokens (1e6 attos)
+    const MAX_STAKE: u128 = 1_000_000_000_000_000_000; // 1000 BATTLE tokens
+
+    let attos: u128 = amount.try_into().unwrap_or(0);
+
+    if attos < MIN_STAKE {
+        return Err(BattleError::InvalidStake(
+            format!("Stake too low: {} (minimum {})", attos, MIN_STAKE)
+        ));
+    }
+
+    if attos > MAX_STAKE {
+        return Err(BattleError::InvalidStake(
+            format!("Stake too high: {} (maximum {})", attos, MAX_STAKE)
+        ));
+    }
+
+    Ok(())
+}
+
+/// Validate platform fee basis points
+fn validate_platform_fee(fee_bps: u16) -> Result<(), BattleError> {
+    if fee_bps > 10000 {
+        return Err(BattleError::InvalidPlatformFee(fee_bps));
+    }
+    Ok(())
+}
+
+/// Validate max rounds
+fn validate_max_rounds(max_rounds: u8) -> Result<(), BattleError> {
+    if max_rounds == 0 || max_rounds > 100 {
+        return Err(BattleError::InvalidMaxRounds(max_rounds));
+    }
+    Ok(())
+}
+
 impl Contract for BattleContract {
     type Message = Message;
     type Parameters = BattleParameters;
     type InstantiationArgument = (); // No arguments needed
-    type EventValue = ();
+    type EventValue = BattleEvent;
 
     async fn load(runtime: ContractRuntime<Self>) -> Self {
         let state = BattleState::load(runtime.root_view_storage_context())
@@ -571,42 +733,32 @@ impl Contract for BattleContract {
     }
 
     async fn instantiate(&mut self, _argument: ()) {
-        let params = self.runtime.application_parameters();
-        let now = self.runtime.system_time();
+        // With auto-deployment, this method just initializes empty state
+        // Actual battle initialization happens via Initialize message
 
-        // Initialize players
-        self.state.player1.set(Some(BattleParticipant::new(
-            params.player1_owner,
-            params.player1_chain,
-            params.player1_character,
-            params.player1_stake,
-        )));
+        // Initialize empty player slots
+        self.state.player1.set(None);
+        self.state.player2.set(None);
 
-        self.state.player2.set(Some(BattleParticipant::new(
-            params.player2_owner,
-            params.player2_chain,
-            params.player2_character,
-            params.player2_stake,
-        )));
-
-        // Initialize battle metadata
-        self.state.status.set(BattleStatus::InProgress);
-        self.state.current_round.set(1);
-        self.state.max_rounds.set(3);
+        // Initialize battle metadata with defaults
+        self.state.status.set(BattleStatus::WaitingForPlayers);
+        self.state.current_round.set(0);
+        self.state.max_rounds.set(10);
         self.state.winner.set(None);
         self.state.round_results.set(Vec::new());
+        self.state.battle_log.set(Vec::new());
 
         // Initialize randomness counter
         self.state.random_counter.set(0);
 
-        // Initialize references
-        self.state.battle_token_app.set(Some(params.battle_token_app));
-        self.state.matchmaking_chain.set(Some(params.matchmaking_chain));
-        self.state.platform_fee_bps.set(params.platform_fee_bps);
-        self.state.treasury_owner.set(Some(params.treasury_owner));
+        // Initialize empty references (will be set via Initialize message)
+        self.state.battle_token_app.set(None);
+        self.state.matchmaking_chain.set(None);
+        self.state.platform_fee_bps.set(300); // Default 3%
+        self.state.treasury_owner.set(None);
 
-        // Initialize timestamps
-        self.state.started_at.set(Some(now));
+        // Initialize empty timestamps
+        self.state.started_at.set(None);
         self.state.completed_at.set(None);
     }
 
@@ -630,14 +782,11 @@ impl Contract for BattleContract {
                     return; // Invalid turn
                 }
 
-                // Get caller from chain ownership
-                let chain_ownership = self.runtime.chain_ownership();
-                let caller = chain_ownership
-                    .super_owners
-                    .iter()
-                    .next()
-                    .expect("No owner found")
-                    .clone();
+                // Get caller from authenticated signer
+                let caller = self
+                    .runtime
+                    .authenticated_signer()
+                    .expect("Operation must be authenticated");
 
                 // Get participant and update turn
                 let mut p1 = self.state.player1.get().clone();
@@ -674,6 +823,9 @@ impl Contract for BattleContract {
             }
 
             Operation::ExecuteRound => {
+                // NOTE: No authentication check - anyone can execute rounds
+                // This prevents griefing where a player refuses to trigger round execution
+                // The operation is safe because it only processes submitted turns
                 if *self.state.status.get() != BattleStatus::InProgress {
                     return;
                 }
@@ -732,6 +884,9 @@ impl Contract for BattleContract {
             }
 
             Operation::FinalizeBattle => {
+                // NOTE: No authentication check - anyone can finalize completed battles
+                // This prevents battles from being stuck if players don't finalize
+                // The operation is safe because it only executes after battle is completed
                 if *self.state.status.get() != BattleStatus::Completed {
                     return;
                 }
@@ -747,14 +902,59 @@ impl Contract for BattleContract {
 
                 // Calculate payouts
                 let total_stake = p1.stake.saturating_add(p2.stake);
-                // For now, winner takes all (TODO: implement platform fee with proper Amount arithmetic)
-                let winner_payout = total_stake;
+                let platform_fee_bps = *self.state.platform_fee_bps.get();
 
-                // TODO: Implement proper token accounting and transfers
-                // When implemented, this should:
-                // 1. Calculate platform fee: (total * platform_fee_bps) / 10000
-                // 2. Transfer platform_fee to treasury via BATTLE token app
-                // 3. Transfer winner_payout to winner via BATTLE token app
+                // Calculate platform fee: (total * fee_bps) / 10000
+                // Amount is u128 internally, work with it as u128
+                let total_attos = u128::from(total_stake);
+                let fee_numerator = total_attos.saturating_mul(platform_fee_bps as u128);
+                let platform_fee_attos = fee_numerator / 10000;
+                // Construct Amount from attos (smallest unit)
+                let platform_fee = Amount::from_attos(platform_fee_attos);
+
+                let winner_payout = total_stake.saturating_sub(platform_fee);
+
+                // Transfer platform fee and winner payout via battle token application
+                if let (Some(battle_token_app), Some(treasury_owner)) = (
+                    self.state.battle_token_app.get().as_ref(),
+                    self.state.treasury_owner.get().as_ref(),
+                ) {
+                    // Transfer platform fee to treasury
+                    if platform_fee > Amount::ZERO {
+                        self.runtime.call_application::<BattleTokenAbi>(
+                            true, // authenticated call
+                            battle_token_app.with_abi(),
+                            &BattleTokenOperation::Transfer {
+                                to: *treasury_owner,
+                                amount: platform_fee,
+                            },
+                        );
+
+                        log::info!(
+                            "Transferred platform fee {} to treasury {:?}",
+                            platform_fee,
+                            treasury_owner
+                        );
+                    }
+
+                    // Transfer winner payout to winner
+                    if winner_payout > Amount::ZERO {
+                        self.runtime.call_application::<BattleTokenAbi>(
+                            true, // authenticated call
+                            battle_token_app.with_abi(),
+                            &BattleTokenOperation::Transfer {
+                                to: winner_owner,
+                                amount: winner_payout,
+                            },
+                        );
+
+                        log::info!(
+                            "Transferred winner payout {} to {:?}",
+                            winner_payout,
+                            winner_owner
+                        );
+                    }
+                }
 
                 // Send battle result messages to both player chains
                 let result_message = Message::BattleResult {
@@ -786,12 +986,158 @@ impl Contract for BattleContract {
                         .with_authentication()
                         .send_to(*matchmaking_chain);
                 }
+
+                // Emit BattleCompleted event for cross-application subscriptions
+                // This allows prediction-chain and registry-chain to listen for battle results
+                let winner_chain = if winner_owner == p1.owner {
+                    p1.chain
+                } else {
+                    p2.chain
+                };
+
+                let loser_chain = if winner_owner == p1.owner {
+                    p2.chain
+                } else {
+                    p1.chain
+                };
+
+                // Calculate combat statistics for both players
+                let round_results = self.state.round_results.get().clone();
+                let (p1_damage_dealt, p1_damage_taken, p1_crits, p1_dodges, p1_highest_crit) =
+                    calculate_combat_stats(&round_results, &p1.owner);
+                let (p2_damage_dealt, p2_damage_taken, p2_crits, p2_dodges, p2_highest_crit) =
+                    calculate_combat_stats(&round_results, &p2.owner);
+
+                let battle_chain_id = self.runtime.chain_id();
+                self.runtime.emit(
+                    "battle_events".into(),
+                    &BattleEvent::BattleCompleted {
+                        battle_chain: battle_chain_id,
+                        player1_chain: p1.chain,
+                        player2_chain: p2.chain,
+                        winner_chain,
+                        loser_chain,
+                        stake: total_stake,
+                        rounds_played: *self.state.current_round.get(),
+                        player1_damage_dealt: p1_damage_dealt,
+                        player1_damage_taken: p1_damage_taken,
+                        player1_crits: p1_crits,
+                        player1_dodges: p1_dodges,
+                        player1_highest_crit: p1_highest_crit,
+                        player2_damage_dealt: p2_damage_dealt,
+                        player2_damage_taken: p2_damage_taken,
+                        player2_crits: p2_crits,
+                        player2_dodges: p2_dodges,
+                        player2_highest_crit: p2_highest_crit,
+                    },
+                );
+
+                log::info!(
+                    "Battle completed on chain {:?}: winner {:?}",
+                    self.runtime.chain_id(),
+                    winner_owner
+                );
             }
         }
     }
 
-    async fn execute_message(&mut self, _message: Message) {
-        // Battle chain primarily sends messages, doesn't receive many
+    async fn execute_message(&mut self, message: Message) {
+        match message {
+            Message::Initialize {
+                player1,
+                player2,
+                matchmaking_chain,
+                battle_token_app,
+                platform_fee_bps,
+                treasury_owner,
+            } => {
+                // This message triggers automatic deployment!
+                // Verify sender is the matchmaking chain (security check)
+                let sender_chain = self.runtime.message_origin_chain_id()
+                    .expect("Message must have origin");
+
+                assert_eq!(
+                    sender_chain, matchmaking_chain,
+                    "Only matchmaking chain can initialize battles"
+                );
+
+                // Check battle not already initialized
+                if self.state.player1.get().is_some() || self.state.player2.get().is_some() {
+                    panic!("Battle already initialized");
+                }
+
+                // SECURITY: Validate input parameters
+                validate_stake(player1.stake).expect("Invalid player1 stake");
+                validate_stake(player2.stake).expect("Invalid player2 stake");
+                validate_platform_fee(platform_fee_bps).expect("Invalid platform fee");
+                validate_max_rounds(10).expect("Invalid max rounds");  // Using default of 10
+
+                // SECURITY: Validate players are different
+                assert_ne!(
+                    player1.owner, player2.owner,
+                    "Players must be different"
+                );
+
+                let now = self.runtime.system_time();
+
+                // Initialize battle participants
+                self.state.player1.set(Some(player1.clone()));
+                self.state.player2.set(Some(player2.clone()));
+
+                // Initialize battle metadata
+                self.state.status.set(BattleStatus::InProgress);
+                self.state.current_round.set(0);
+                self.state.max_rounds.set(10); // Default max rounds
+                self.state.winner.set(None);
+                self.state.round_results.set(Vec::new());
+
+                // Initialize randomness counter
+                self.state.random_counter.set(0);
+
+                // Initialize configuration
+                self.state.battle_token_app.set(Some(battle_token_app));
+                self.state.matchmaking_chain.set(Some(matchmaking_chain));
+                self.state.platform_fee_bps.set(platform_fee_bps);
+                self.state.treasury_owner.set(Some(treasury_owner));
+
+                // Initialize timestamps
+                self.state.started_at.set(Some(now));
+                self.state.completed_at.set(None);
+
+                // Initialize combat log
+                let mut battle_log = Vec::new();
+                battle_log.push(format!(
+                    "Battle initialized: {:?} vs {:?}",
+                    player1.owner, player2.owner
+                ));
+                self.state.battle_log.set(battle_log);
+
+                // Emit BattleStarted event for cross-chain subscriptions
+                let total_stake = player1.stake.saturating_add(player2.stake);
+                let battle_chain_id = self.runtime.chain_id();
+                self.runtime.emit(
+                    "battle_events".into(),
+                    &BattleEvent::BattleStarted {
+                        battle_chain: battle_chain_id,
+                        player1_chain: player1.chain,
+                        player2_chain: player2.chain,
+                        total_stake,
+                    },
+                );
+
+                log::info!(
+                    "Battle initialized on chain {:?}: {:?} vs {:?}",
+                    self.runtime.chain_id(),
+                    player1.owner,
+                    player2.owner
+                );
+            }
+
+            Message::BattleResult { .. } | Message::BattleCompleted { .. } => {
+                // These are outgoing messages, not handled here
+                log::warn!("Received outgoing message type - ignoring");
+            }
+        }
     }
 
     async fn store(mut self) {

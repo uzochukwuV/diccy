@@ -9,6 +9,39 @@ use linera_sdk::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+// Battle event types for subscription (defined inline to avoid dependencies)
+/// Events emitted by battle-chain
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum BattleEvent {
+    BattleStarted {
+        battle_chain: ChainId,
+        player1_chain: ChainId,
+        player2_chain: ChainId,
+        total_stake: Amount,
+    },
+    BattleCompleted {
+        battle_chain: ChainId,
+        player1_chain: ChainId,
+        player2_chain: ChainId,
+        winner_chain: ChainId,
+        loser_chain: ChainId,
+        stake: Amount,
+        rounds_played: u8,
+        // Combat statistics for player 1
+        player1_damage_dealt: u64,
+        player1_damage_taken: u64,
+        player1_crits: u64,
+        player1_dodges: u64,
+        player1_highest_crit: u64,
+        // Combat statistics for player 2
+        player2_damage_dealt: u64,
+        player2_damage_taken: u64,
+        player2_crits: u64,
+        player2_dodges: u64,
+        player2_highest_crit: u64,
+    },
+}
+
 /// Registry Chain Application ABI
 pub struct RegistryAbi;
 
@@ -217,6 +250,15 @@ pub struct RegistryState {
     /// Top characters by ELO (limited to top 100)
     pub top_elo: RegisterView<Vec<String>>, // Character IDs sorted by ELO
 
+    /// SECURITY: Track known battle chains (for message authentication)
+    pub known_battle_chains: MapView<ChainId, bool>,
+
+    /// SECURITY: Admin owner (for pause functionality)
+    pub admin: RegisterView<Owner>,
+
+    /// SECURITY: Paused state
+    pub paused: RegisterView<bool>,
+
     /// Timestamps
     pub created_at: RegisterView<Timestamp>,
 }
@@ -237,23 +279,36 @@ impl RegistryState {
     }
 
     /// Update leaderboard after character stats change
-    pub fn update_leaderboard(&mut self, character_id: String) {
-        // For now, just keep a simple list
-        // TODO: Implement proper sorted leaderboard with efficient updates
+    /// Sorts by ELO rating (descending) and keeps top 100
+    pub async fn update_leaderboard(&mut self, character_id: String) -> Result<(), RegistryError> {
         let mut top = self.top_elo.get().clone();
 
         // Remove if already exists
         top.retain(|id| id != &character_id);
 
-        // Add to list (will be sorted later)
+        // Add to list
         top.push(character_id);
 
-        // Keep only top 100
-        if top.len() > 100 {
-            top.truncate(100);
+        // Fetch ELO ratings for all characters in the list
+        let mut character_elos: Vec<(String, u64)> = Vec::new();
+        for id in top.iter() {
+            if let Some(stats) = self.characters.get(id).await? {
+                character_elos.push((id.clone(), stats.elo_rating));
+            }
         }
 
-        self.top_elo.set(top);
+        // Sort by ELO rating (descending)
+        character_elos.sort_by(|a, b| b.1.cmp(&a.1));
+
+        // Keep only top 100 and extract character IDs
+        let sorted_ids: Vec<String> = character_elos
+            .into_iter()
+            .take(100)
+            .map(|(id, _)| id)
+            .collect();
+
+        self.top_elo.set(sorted_ids);
+        Ok(())
     }
 }
 
@@ -304,6 +359,21 @@ pub enum Operation {
     MarkCharacterDefeated {
         character_id: String,
     },
+
+    /// Subscribe to battle events from a battle chain
+    SubscribeToBattleEvents {
+        battle_chain_id: ChainId,
+        battle_app_id: linera_sdk::linera_base_types::ApplicationId,
+    },
+
+    /// SECURITY: Pause contract (admin only)
+    Pause,
+
+    /// SECURITY: Unpause contract (admin only)
+    Unpause,
+
+    /// SECURITY: Transfer admin rights (admin only)
+    TransferAdmin { new_admin: Owner },
 }
 
 /// Messages
@@ -317,6 +387,18 @@ pub enum Message {
         winner_chain: ChainId,
         stake: Amount,
         rounds_played: u8,
+        // Combat statistics for player 1
+        player1_damage_dealt: u64,
+        player1_damage_taken: u64,
+        player1_crits: u64,
+        player1_dodges: u64,
+        player1_highest_crit: u64,
+        // Combat statistics for player 2
+        player2_damage_dealt: u64,
+        player2_damage_taken: u64,
+        player2_crits: u64,
+        player2_dodges: u64,
+        player2_highest_crit: u64,
     },
 
     /// Character registered
@@ -337,6 +419,15 @@ pub enum RegistryError {
 
     #[error("Battle not found")]
     BattleNotFound,
+
+    #[error("Unauthorized message sender: {0:?}")]
+    UnauthorizedSender(ChainId),
+
+    #[error("Contract is paused")]
+    ContractPaused,
+
+    #[error("Not authorized: only admin can perform this operation")]
+    NotAuthorized,
 
     #[error("View error: {0}")]
     ViewError(String),
@@ -386,6 +477,18 @@ impl Contract for RegistryContract {
     }
 
     async fn execute_operation(&mut self, operation: Operation) -> Self::Response {
+        // SECURITY: Check if contract is paused (skip for admin operations)
+        match operation {
+            Operation::Pause | Operation::Unpause | Operation::TransferAdmin { .. } => {
+                // Admin operations allowed even when paused
+            }
+            _ => {
+                if *self.state.paused.get() {
+                    return Err(RegistryError::ContractPaused);
+                }
+            }
+        }
+
         match operation {
             Operation::RegisterCharacter {
                 character_id,
@@ -412,7 +515,7 @@ impl Contract for RegistryContract {
                 );
 
                 self.state.register_character(stats)?;
-                self.state.update_leaderboard(character_id);
+                self.state.update_leaderboard(character_id).await?;
             }
 
             Operation::UpdateCharacterStats {
@@ -445,7 +548,7 @@ impl Contract for RegistryContract {
                 );
 
                 self.state.characters.insert(&character_id, stats)?;
-                self.state.update_leaderboard(character_id);
+                self.state.update_leaderboard(character_id).await?;
             }
 
             Operation::RecordBattle {
@@ -499,6 +602,60 @@ impl Contract for RegistryContract {
 
                 self.state.characters.insert(&character_id, stats)?;
             }
+
+            Operation::SubscribeToBattleEvents { battle_chain_id, battle_app_id } => {
+                // Subscribe to battle events from the specified battle chain
+                self.runtime.subscribe_to_events(
+                    battle_chain_id,
+                    battle_app_id,
+                    "battle_events".into(),
+                );
+
+                // SECURITY: Track this battle chain for message authentication
+                self.state.known_battle_chains.insert(&battle_chain_id, true)?;
+
+                log::info!(
+                    "Registry subscribed to battle events from chain {:?}, app {:?}",
+                    battle_chain_id,
+                    battle_app_id
+                );
+            }
+
+            Operation::Pause => {
+                // SECURITY: Only admin can pause
+                let caller = self.runtime.authenticated_signer()
+                    .ok_or(RegistryError::NotAuthorized)?;
+                let admin = *self.state.admin.get();
+                if caller != admin {
+                    return Err(RegistryError::NotAuthorized);
+                }
+                self.state.paused.set(true);
+                log::warn!("Registry paused by admin: {:?}", admin);
+            }
+
+            Operation::Unpause => {
+                // SECURITY: Only admin can unpause
+                let caller = self.runtime.authenticated_signer()
+                    .ok_or(RegistryError::NotAuthorized)?;
+                let admin = *self.state.admin.get();
+                if caller != admin {
+                    return Err(RegistryError::NotAuthorized);
+                }
+                self.state.paused.set(false);
+                log::info!("Registry unpaused by admin: {:?}", admin);
+            }
+
+            Operation::TransferAdmin { new_admin } => {
+                // SECURITY: Only current admin can transfer admin rights
+                let caller = self.runtime.authenticated_signer()
+                    .ok_or(RegistryError::NotAuthorized)?;
+                let admin = *self.state.admin.get();
+                if caller != admin {
+                    return Err(RegistryError::NotAuthorized);
+                }
+                self.state.admin.set(new_admin);
+                log::info!("Registry admin transferred from {:?} to {:?}", admin, new_admin);
+            }
         }
 
         Ok(())
@@ -513,7 +670,40 @@ impl Contract for RegistryContract {
                 winner_chain,
                 stake,
                 rounds_played,
+                player1_damage_dealt,
+                player1_damage_taken,
+                player1_crits,
+                player1_dodges,
+                player1_highest_crit,
+                player2_damage_dealt,
+                player2_damage_taken,
+                player2_crits,
+                player2_dodges,
+                player2_highest_crit,
             } => {
+                // SECURITY: Validate message sender is a known battle chain
+                let sender_chain = match self.runtime.message_origin_chain_id() {
+                    Some(chain) => chain,
+                    None => {
+                        log::error!("BattleCompleted message has no origin chain");
+                        return;
+                    }
+                };
+
+                // Check if this is a known battle chain
+                match self.state.known_battle_chains.get(&sender_chain).await {
+                    Ok(Some(true)) => {
+                        // Valid battle chain, continue processing
+                    }
+                    _ => {
+                        log::error!(
+                            "SECURITY: Unauthorized BattleCompleted from unknown chain: {:?}",
+                            sender_chain
+                        );
+                        return; // Reject message from unknown battle chain
+                    }
+                }
+
                 // Get character IDs from owner chains
                 let player1_id = self.state.owner_to_character.get(&player1_chain).await
                     .ok().flatten();
@@ -526,6 +716,46 @@ impl Contract for RegistryContract {
                     } else {
                         p2_id.clone()
                     };
+
+                    // Get opponent ELO ratings for ELO calculation
+                    let p1_stats = self.state.characters.get(&p1_id).await.ok().flatten();
+                    let p2_stats = self.state.characters.get(&p2_id).await.ok().flatten();
+
+                    if let (Some(p1_elo_rating), Some(p2_elo_rating)) =
+                        (p1_stats.map(|s| s.elo_rating), p2_stats.map(|s| s.elo_rating)) {
+
+                        // Update player 1 stats
+                        let p1_won = winner_chain == player1_chain;
+                        let p1_earnings = if p1_won { stake } else { Amount::ZERO };
+                        let _ = self.execute_operation(Operation::UpdateCharacterStats {
+                            character_id: p1_id.clone(),
+                            won: p1_won,
+                            damage_dealt: player1_damage_dealt,
+                            damage_taken: player1_damage_taken,
+                            crits: player1_crits,
+                            dodges: player1_dodges,
+                            highest_crit: player1_highest_crit,
+                            earnings: p1_earnings,
+                            stake,
+                            opponent_elo: p2_elo_rating,
+                        }).await;
+
+                        // Update player 2 stats
+                        let p2_won = winner_chain == player2_chain;
+                        let p2_earnings = if p2_won { stake } else { Amount::ZERO };
+                        let _ = self.execute_operation(Operation::UpdateCharacterStats {
+                            character_id: p2_id.clone(),
+                            won: p2_won,
+                            damage_dealt: player2_damage_dealt,
+                            damage_taken: player2_damage_taken,
+                            crits: player2_crits,
+                            dodges: player2_dodges,
+                            highest_crit: player2_highest_crit,
+                            earnings: p2_earnings,
+                            stake,
+                            opponent_elo: p1_elo_rating,
+                        }).await;
+                    }
 
                     // Record battle
                     let _ = self.execute_operation(Operation::RecordBattle {
