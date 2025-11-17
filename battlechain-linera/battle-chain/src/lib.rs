@@ -12,6 +12,21 @@ use linera_sdk::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+// Battle Token ABI for cross-application calls
+// Defined inline to avoid circular dependencies (battle-token is cdylib)
+pub struct BattleTokenAbi;
+
+impl ContractAbi for BattleTokenAbi {
+    type Operation = BattleTokenOperation;
+    type Response = ();
+}
+
+/// Battle token operations (subset needed for calls)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum BattleTokenOperation {
+    Transfer { to: Owner, amount: Amount },
+}
+
 /// Battle Chain Application ABI
 pub struct BattleChainAbi;
 
@@ -766,13 +781,47 @@ impl Contract for BattleContract {
 
                 let winner_payout = total_stake.saturating_sub(platform_fee);
 
-                // TODO: Implement token transfers via battle token application
-                // For now, we track the amounts and rely on the matchmaking chain
-                // to have pre-funded the battle chain with the total stake
-                // Token transfers will be implemented once we determine the correct SDK method
-                //
-                // The winner_payout will be sent via the BattleResult message
-                // and the player chain will credit the winner's balance
+                // Transfer platform fee and winner payout via battle token application
+                if let (Some(battle_token_app), Some(treasury_owner)) = (
+                    self.state.battle_token_app.get().as_ref(),
+                    self.state.treasury_owner.get().as_ref(),
+                ) {
+                    // Transfer platform fee to treasury
+                    if platform_fee > Amount::ZERO {
+                        self.runtime.call_application::<BattleTokenAbi>(
+                            true, // authenticated call
+                            battle_token_app.with_abi(),
+                            &BattleTokenOperation::Transfer {
+                                to: *treasury_owner,
+                                amount: platform_fee,
+                            },
+                        );
+
+                        log::info!(
+                            "Transferred platform fee {} to treasury {:?}",
+                            platform_fee,
+                            treasury_owner
+                        );
+                    }
+
+                    // Transfer winner payout to winner
+                    if winner_payout > Amount::ZERO {
+                        self.runtime.call_application::<BattleTokenAbi>(
+                            true, // authenticated call
+                            battle_token_app.with_abi(),
+                            &BattleTokenOperation::Transfer {
+                                to: winner_owner,
+                                amount: winner_payout,
+                            },
+                        );
+
+                        log::info!(
+                            "Transferred winner payout {} to {:?}",
+                            winner_payout,
+                            winner_owner
+                        );
+                    }
+                }
 
                 // Send battle result messages to both player chains
                 let result_message = Message::BattleResult {
@@ -804,6 +853,26 @@ impl Contract for BattleContract {
                         .with_authentication()
                         .send_to(*matchmaking_chain);
                 }
+
+                // TODO: Cross-application notifications
+                // The following notifications need architectural decisions:
+                //
+                // 1. Prediction Market notification:
+                //    - Should send BattleEnded { battle_chain, winner_chain }
+                //    - Challenge: prepare_message sends to same app type on different chain
+                //    - Solutions: events + subscriptions, or coordinator pattern
+                //
+                // 2. Registry notification for leaderboard:
+                //    - Should send BattleCompleted with full stats
+                //    - Same cross-application messaging challenge
+                //
+                // 3. Architecture options:
+                //    a) Event-based: battle-chain emits events, others subscribe
+                //    b) Coordinator: matchmaking relays notifications
+                //    c) Shared app: all chains run battle-chain app (current approach)
+                //
+                // Current code sends to player chains assuming battle-chain app is installed
+                // on all player chains. This needs to be documented or redesigned.
             }
         }
     }
