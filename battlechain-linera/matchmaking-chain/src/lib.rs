@@ -290,11 +290,20 @@ impl MatchmakingContract {
 
         // Send initialization message to battle chain
         // Linera will auto-deploy the battle application when it sees this message!
+        let battle_token_app = self.state.battle_token_app.get()
+            .expect("Battle token app must be configured");
+        let platform_fee_bps = *self.state.platform_fee_bps.get();
+        let treasury_owner = self.state.treasury_owner.get()
+            .expect("Treasury owner must be configured");
+
         self.runtime
             .prepare_message(BattleMessage::Initialize {
                 player1: participant1,
                 player2: participant2,
                 matchmaking_chain: self.runtime.chain_id(),
+                battle_token_app: *battle_token_app,
+                platform_fee_bps,
+                treasury_owner: *treasury_owner,
             })
             .with_authentication() // Verify sender is matchmaking
             .send_to(battle_chain_id);

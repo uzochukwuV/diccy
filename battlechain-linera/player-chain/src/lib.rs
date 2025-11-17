@@ -49,6 +49,9 @@ pub struct PlayerChainState {
     /// Locked stakes per battle
     pub battle_stakes: MapView<ChainId, Amount>,
 
+    /// Character in each battle (battle_chain -> character_nft_id)
+    pub battle_characters: MapView<ChainId, String>,
+
     /// Timestamps
     pub created_at: RegisterView<Timestamp>,
     pub last_active: RegisterView<Timestamp>,
@@ -245,7 +248,18 @@ impl Contract for PlayerChainContract {
                 self.state.characters.set(chars);
             }
 
-            Operation::JoinBattle { battle_chain, character_nft: _, stake } => {
+            Operation::JoinBattle { battle_chain, character_nft, stake } => {
+                // Store which character is in this battle
+                self.state.battle_characters.insert(&battle_chain, character_nft.clone())
+                    .expect("Failed to store character for battle");
+
+                // Mark character as in battle
+                let mut chars = self.state.characters.get().clone();
+                if let Some(character) = chars.iter_mut().find(|c| c.nft_id == character_nft) {
+                    character.in_battle = true;
+                }
+                self.state.characters.set(chars);
+
                 // Lock stake
                 let _ = self.state.lock_battle(battle_chain, stake);
 
@@ -295,9 +309,7 @@ impl Contract for PlayerChainContract {
                 let player_owner = self.runtime.authenticated_signer();
                 let won = player_owner.map(|o| o == winner).unwrap_or(false);
 
-                // Find and unlock battle stake
-                // Note: We need to determine which battle chain this came from
-                // The message should be from the battle chain itself
+                // Find battle chain from message origin
                 let battle_chain = match self.runtime.message_origin_chain_id() {
                     Some(chain) => chain,
                     None => {
@@ -310,6 +322,78 @@ impl Contract for PlayerChainContract {
                         }
                     }
                 };
+
+                // === CHARACTER PROGRESSION ===
+                // Get character ID from battle
+                let character_id = match self.state.battle_characters.get(&battle_chain).await {
+                    Ok(Some(id)) => id,
+                    _ => {
+                        // No character tracked - skip progression but continue with other updates
+                        String::new()
+                    }
+                };
+
+                // Update character progression if we have a character ID
+                if !character_id.is_empty() {
+                    let mut chars = self.state.characters.get().clone();
+                    let character_opt = chars.iter_mut().find(|c| c.nft_id == character_id);
+
+                    if let Some(character) = character_opt {
+                        // Mark character as no longer in battle
+                        character.in_battle = false;
+
+                        if won {
+                            // Award XP based on rounds played
+                            let xp_reward = 100 + (rounds_played as u64 * 10);
+                            character.xp += xp_reward;
+
+                            // Check for level up
+                            let xp_needed = 100 * (character.level as u64);
+                            if character.xp >= xp_needed {
+                                character.level += 1;
+                                character.xp = character.xp.saturating_sub(xp_needed);
+
+                                // Update stats for new level
+                                character.hp_max += 10;
+                                character.current_hp = character.hp_max; // Full heal on level up
+                                character.min_damage += 1;
+                                character.max_damage += 2;
+
+                                log::info!(
+                                    "Character {} leveled up to level {}!",
+                                    character.nft_id,
+                                    character.level
+                                );
+                            }
+                        } else {
+                            // Lose a life (permadeath mechanic)
+                            character.lives = character.lives.saturating_sub(1);
+
+                            if character.lives == 0 {
+                                // Character is permanently dead - remove from list
+                                log::warn!(
+                                    "Character {} has died (permadeath)!",
+                                    character.nft_id
+                                );
+
+                                // Remove character from character list
+                                chars.retain(|c| c.nft_id != character_id);
+                            } else {
+                                log::info!(
+                                    "Character {} has {} lives remaining",
+                                    character.nft_id,
+                                    character.lives
+                                );
+                            }
+                        }
+                    }
+
+                    self.state.characters.set(chars);
+
+                    // Remove character from battle tracking
+                    let _ = self.state.battle_characters.remove(&battle_chain);
+                }
+                // === END CHARACTER PROGRESSION ===
 
                 // Unlock stake
                 let _ = self.state.unlock_battle(&battle_chain).await;
@@ -329,9 +413,6 @@ impl Contract for PlayerChainContract {
                         .unwrap_or(*self.state.battle_balance.get());
                     self.state.battle_balance.set(new_balance);
                 }
-
-                // Log battle completion
-                // Note: In production, you'd want to emit events or update more detailed stats
             }
 
             Message::LockStakeRequest {

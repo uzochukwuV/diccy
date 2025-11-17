@@ -164,6 +164,9 @@ pub struct BattleState {
     /// Round results history
     pub round_results: RegisterView<Vec<RoundResult>>,
 
+    /// Battle log for tracking events
+    pub battle_log: RegisterView<Vec<String>>,
+
     /// Randomness counter for generating unique seeds per action
     pub random_counter: RegisterView<u64>,
 
@@ -478,6 +481,9 @@ pub enum Message {
         player1: BattleParticipant,
         player2: BattleParticipant,
         matchmaking_chain: ChainId,
+        battle_token_app: ApplicationId,
+        platform_fee_bps: u16,
+        treasury_owner: Owner,
     },
 
     /// Notify player of battle result
@@ -579,42 +585,32 @@ impl Contract for BattleContract {
     }
 
     async fn instantiate(&mut self, _argument: ()) {
-        let params = self.runtime.application_parameters();
-        let now = self.runtime.system_time();
+        // With auto-deployment, this method just initializes empty state
+        // Actual battle initialization happens via Initialize message
 
-        // Initialize players
-        self.state.player1.set(Some(BattleParticipant::new(
-            params.player1_owner,
-            params.player1_chain,
-            params.player1_character,
-            params.player1_stake,
-        )));
+        // Initialize empty player slots
+        self.state.player1.set(None);
+        self.state.player2.set(None);
 
-        self.state.player2.set(Some(BattleParticipant::new(
-            params.player2_owner,
-            params.player2_chain,
-            params.player2_character,
-            params.player2_stake,
-        )));
-
-        // Initialize battle metadata
-        self.state.status.set(BattleStatus::InProgress);
-        self.state.current_round.set(1);
-        self.state.max_rounds.set(3);
+        // Initialize battle metadata with defaults
+        self.state.status.set(BattleStatus::WaitingForPlayers);
+        self.state.current_round.set(0);
+        self.state.max_rounds.set(10);
         self.state.winner.set(None);
         self.state.round_results.set(Vec::new());
+        self.state.battle_log.set(Vec::new());
 
         // Initialize randomness counter
         self.state.random_counter.set(0);
 
-        // Initialize references
-        self.state.battle_token_app.set(Some(params.battle_token_app));
-        self.state.matchmaking_chain.set(Some(params.matchmaking_chain));
-        self.state.platform_fee_bps.set(params.platform_fee_bps);
-        self.state.treasury_owner.set(Some(params.treasury_owner));
+        // Initialize empty references (will be set via Initialize message)
+        self.state.battle_token_app.set(None);
+        self.state.matchmaking_chain.set(None);
+        self.state.platform_fee_bps.set(300); // Default 3%
+        self.state.treasury_owner.set(None);
 
-        // Initialize timestamps
-        self.state.started_at.set(Some(now));
+        // Initialize empty timestamps
+        self.state.started_at.set(None);
         self.state.completed_at.set(None);
     }
 
@@ -638,14 +634,11 @@ impl Contract for BattleContract {
                     return; // Invalid turn
                 }
 
-                // Get caller from chain ownership
-                let chain_ownership = self.runtime.chain_ownership();
-                let caller = chain_ownership
-                    .super_owners
-                    .iter()
-                    .next()
-                    .expect("No owner found")
-                    .clone();
+                // Get caller from authenticated signer
+                let caller = self
+                    .runtime
+                    .authenticated_signer()
+                    .expect("Operation must be authenticated");
 
                 // Get participant and update turn
                 let mut p1 = self.state.player1.get().clone();
@@ -682,6 +675,9 @@ impl Contract for BattleContract {
             }
 
             Operation::ExecuteRound => {
+                // NOTE: No authentication check - anyone can execute rounds
+                // This prevents griefing where a player refuses to trigger round execution
+                // The operation is safe because it only processes submitted turns
                 if *self.state.status.get() != BattleStatus::InProgress {
                     return;
                 }
@@ -740,6 +736,9 @@ impl Contract for BattleContract {
             }
 
             Operation::FinalizeBattle => {
+                // NOTE: No authentication check - anyone can finalize completed battles
+                // This prevents battles from being stuck if players don't finalize
+                // The operation is safe because it only executes after battle is completed
                 if *self.state.status.get() != BattleStatus::Completed {
                     return;
                 }
@@ -755,14 +754,25 @@ impl Contract for BattleContract {
 
                 // Calculate payouts
                 let total_stake = p1.stake.saturating_add(p2.stake);
-                // For now, winner takes all (TODO: implement platform fee with proper Amount arithmetic)
-                let winner_payout = total_stake;
+                let platform_fee_bps = *self.state.platform_fee_bps.get();
 
-                // TODO: Implement proper token accounting and transfers
-                // When implemented, this should:
-                // 1. Calculate platform fee: (total * platform_fee_bps) / 10000
-                // 2. Transfer platform_fee to treasury via BATTLE token app
-                // 3. Transfer winner_payout to winner via BATTLE token app
+                // Calculate platform fee: (total * fee_bps) / 10000
+                // Amount is u128 internally, work with it as u128
+                let total_attos = u128::from(total_stake);
+                let fee_numerator = total_attos.saturating_mul(platform_fee_bps as u128);
+                let platform_fee_attos = fee_numerator / 10000;
+                // Construct Amount from attos (smallest unit)
+                let platform_fee = Amount::from_attos(platform_fee_attos);
+
+                let winner_payout = total_stake.saturating_sub(platform_fee);
+
+                // TODO: Implement token transfers via battle token application
+                // For now, we track the amounts and rely on the matchmaking chain
+                // to have pre-funded the battle chain with the total stake
+                // Token transfers will be implemented once we determine the correct SDK method
+                //
+                // The winner_payout will be sent via the BattleResult message
+                // and the player chain will credit the winner's balance
 
                 // Send battle result messages to both player chains
                 let result_message = Message::BattleResult {
@@ -800,7 +810,14 @@ impl Contract for BattleContract {
 
     async fn execute_message(&mut self, message: Message) {
         match message {
-            Message::Initialize { player1, player2, matchmaking_chain } => {
+            Message::Initialize {
+                player1,
+                player2,
+                matchmaking_chain,
+                battle_token_app,
+                platform_fee_bps,
+                treasury_owner,
+            } => {
                 // This message triggers automatic deployment!
                 // Verify sender is the matchmaking chain (security check)
                 let sender_chain = self.runtime.message_origin_chain_id()
@@ -816,18 +833,34 @@ impl Contract for BattleContract {
                     panic!("Battle already initialized");
                 }
 
+                let now = self.runtime.system_time();
+
                 // Initialize battle participants
                 self.state.player1.set(Some(player1.clone()));
                 self.state.player2.set(Some(player2.clone()));
 
-                // Set battle status to in progress
+                // Initialize battle metadata
                 self.state.status.set(BattleStatus::InProgress);
                 self.state.current_round.set(0);
                 self.state.max_rounds.set(10); // Default max rounds
                 self.state.winner.set(None);
+                self.state.round_results.set(Vec::new());
+
+                // Initialize randomness counter
+                self.state.random_counter.set(0);
+
+                // Initialize configuration
+                self.state.battle_token_app.set(Some(battle_token_app));
+                self.state.matchmaking_chain.set(Some(matchmaking_chain));
+                self.state.platform_fee_bps.set(platform_fee_bps);
+                self.state.treasury_owner.set(Some(treasury_owner));
+
+                // Initialize timestamps
+                self.state.started_at.set(Some(now));
+                self.state.completed_at.set(None);
 
                 // Initialize combat log
-                let mut battle_log = self.state.battle_log.get().clone();
+                let mut battle_log = Vec::new();
                 battle_log.push(format!(
                     "Battle initialized: {:?} vs {:?}",
                     player1.owner, player2.owner
