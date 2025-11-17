@@ -598,6 +598,21 @@ pub enum BattleError {
     #[error("Player defeated")]
     PlayerDefeated,
 
+    #[error("Invalid stake: {0}")]
+    InvalidStake(String),
+
+    #[error("Invalid platform fee: {0} bps (must be 0-10000)")]
+    InvalidPlatformFee(u16),
+
+    #[error("Invalid max rounds: {0} (must be 1-100)")]
+    InvalidMaxRounds(u8),
+
+    #[error("Unauthorized message sender")]
+    UnauthorizedSender,
+
+    #[error("Contract is paused")]
+    ContractPaused,
+
     #[error("View error: {0}")]
     ViewError(String),
 }
@@ -661,6 +676,46 @@ fn calculate_combat_stats(
     }
 
     (damage_dealt, damage_taken, crits, dodges, highest_crit)
+}
+
+/// Validation functions for security
+
+/// Validate stake amount
+fn validate_stake(amount: Amount) -> Result<(), BattleError> {
+    const MIN_STAKE: u128 = 1_000_000; // 0.001 BATTLE tokens (1e6 attos)
+    const MAX_STAKE: u128 = 1_000_000_000_000_000_000; // 1000 BATTLE tokens
+
+    let attos: u128 = amount.try_into().unwrap_or(0);
+
+    if attos < MIN_STAKE {
+        return Err(BattleError::InvalidStake(
+            format!("Stake too low: {} (minimum {})", attos, MIN_STAKE)
+        ));
+    }
+
+    if attos > MAX_STAKE {
+        return Err(BattleError::InvalidStake(
+            format!("Stake too high: {} (maximum {})", attos, MAX_STAKE)
+        ));
+    }
+
+    Ok(())
+}
+
+/// Validate platform fee basis points
+fn validate_platform_fee(fee_bps: u16) -> Result<(), BattleError> {
+    if fee_bps > 10000 {
+        return Err(BattleError::InvalidPlatformFee(fee_bps));
+    }
+    Ok(())
+}
+
+/// Validate max rounds
+fn validate_max_rounds(max_rounds: u8) -> Result<(), BattleError> {
+    if max_rounds == 0 || max_rounds > 100 {
+        return Err(BattleError::InvalidMaxRounds(max_rounds));
+    }
+    Ok(())
 }
 
 impl Contract for BattleContract {
@@ -1010,6 +1065,18 @@ impl Contract for BattleContract {
                 if self.state.player1.get().is_some() || self.state.player2.get().is_some() {
                     panic!("Battle already initialized");
                 }
+
+                // SECURITY: Validate input parameters
+                validate_stake(player1.stake).expect("Invalid player1 stake");
+                validate_stake(player2.stake).expect("Invalid player2 stake");
+                validate_platform_fee(platform_fee_bps).expect("Invalid platform fee");
+                validate_max_rounds(10).expect("Invalid max rounds");  // Using default of 10
+
+                // SECURITY: Validate players are different
+                assert_ne!(
+                    player1.owner, player2.owner,
+                    "Players must be different"
+                );
 
                 let now = self.runtime.system_time();
 
