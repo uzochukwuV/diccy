@@ -1,4 +1,5 @@
 use async_graphql::{Request, Response, Schema, EmptyMutation, EmptySubscription, SimpleObject};
+use battlechain_shared_events::{BattleEvent, CombatStats};
 use battlechain_shared_types::{CharacterClass, Owner};
 use linera_sdk::{
     abi::{ContractAbi, ServiceAbi, WithContractAbi, WithServiceAbi},
@@ -9,38 +10,7 @@ use linera_sdk::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-// Battle event types for subscription (defined inline to avoid dependencies)
-/// Events emitted by battle-chain
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum BattleEvent {
-    BattleStarted {
-        battle_chain: ChainId,
-        player1_chain: ChainId,
-        player2_chain: ChainId,
-        total_stake: Amount,
-    },
-    BattleCompleted {
-        battle_chain: ChainId,
-        player1_chain: ChainId,
-        player2_chain: ChainId,
-        winner_chain: ChainId,
-        loser_chain: ChainId,
-        stake: Amount,
-        rounds_played: u8,
-        // Combat statistics for player 1
-        player1_damage_dealt: u64,
-        player1_damage_taken: u64,
-        player1_crits: u64,
-        player1_dodges: u64,
-        player1_highest_crit: u64,
-        // Combat statistics for player 2
-        player2_damage_dealt: u64,
-        player2_damage_taken: u64,
-        player2_crits: u64,
-        player2_dodges: u64,
-        player2_highest_crit: u64,
-    },
-}
+// BattleEvent is now imported from battlechain-shared-events
 
 /// Registry Chain Application ABI
 pub struct RegistryAbi;
@@ -387,18 +357,9 @@ pub enum Message {
         winner_chain: ChainId,
         stake: Amount,
         rounds_played: u8,
-        // Combat statistics for player 1
-        player1_damage_dealt: u64,
-        player1_damage_taken: u64,
-        player1_crits: u64,
-        player1_dodges: u64,
-        player1_highest_crit: u64,
-        // Combat statistics for player 2
-        player2_damage_dealt: u64,
-        player2_damage_taken: u64,
-        player2_crits: u64,
-        player2_dodges: u64,
-        player2_highest_crit: u64,
+        // Combat statistics (now using shared struct)
+        player1_stats: CombatStats,
+        player2_stats: CombatStats,
     },
 
     /// Character registered
@@ -670,16 +631,8 @@ impl Contract for RegistryContract {
                 winner_chain,
                 stake,
                 rounds_played,
-                player1_damage_dealt,
-                player1_damage_taken,
-                player1_crits,
-                player1_dodges,
-                player1_highest_crit,
-                player2_damage_dealt,
-                player2_damage_taken,
-                player2_crits,
-                player2_dodges,
-                player2_highest_crit,
+                player1_stats,
+                player2_stats,
             } => {
                 // SECURITY: Validate message sender is a known battle chain
                 let sender_chain = match self.runtime.message_origin_chain_id() {
@@ -730,11 +683,11 @@ impl Contract for RegistryContract {
                         let _ = self.execute_operation(Operation::UpdateCharacterStats {
                             character_id: p1_id.clone(),
                             won: p1_won,
-                            damage_dealt: player1_damage_dealt,
-                            damage_taken: player1_damage_taken,
-                            crits: player1_crits,
-                            dodges: player1_dodges,
-                            highest_crit: player1_highest_crit,
+                            damage_dealt: player1_stats.damage_dealt,
+                            damage_taken: player1_stats.damage_taken,
+                            crits: player1_stats.crits,
+                            dodges: player1_stats.dodges,
+                            highest_crit: player1_stats.highest_crit,
                             earnings: p1_earnings,
                             stake,
                             opponent_elo: p2_elo_rating,
@@ -746,11 +699,11 @@ impl Contract for RegistryContract {
                         let _ = self.execute_operation(Operation::UpdateCharacterStats {
                             character_id: p2_id.clone(),
                             won: p2_won,
-                            damage_dealt: player2_damage_dealt,
-                            damage_taken: player2_damage_taken,
-                            crits: player2_crits,
-                            dodges: player2_dodges,
-                            highest_crit: player2_highest_crit,
+                            damage_dealt: player2_stats.damage_dealt,
+                            damage_taken: player2_stats.damage_taken,
+                            crits: player2_stats.crits,
+                            dodges: player2_stats.dodges,
+                            highest_crit: player2_stats.highest_crit,
                             earnings: p2_earnings,
                             stake,
                             opponent_elo: p1_elo_rating,

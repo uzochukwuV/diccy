@@ -1,4 +1,5 @@
 use async_graphql::{Request, Response, Schema, EmptyMutation, EmptySubscription, SimpleObject};
+use battlechain_shared_events::BattleEvent;
 use battlechain_shared_types::Owner;
 use linera_sdk::{
     abi::{ContractAbi, ServiceAbi, WithContractAbi, WithServiceAbi},
@@ -9,38 +10,7 @@ use linera_sdk::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-// Battle event types for subscription (defined inline to avoid dependencies)
-/// Events emitted by battle-chain
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum BattleEvent {
-    BattleStarted {
-        battle_chain: ChainId,
-        player1_chain: ChainId,
-        player2_chain: ChainId,
-        total_stake: Amount,
-    },
-    BattleCompleted {
-        battle_chain: ChainId,
-        player1_chain: ChainId,
-        player2_chain: ChainId,
-        winner_chain: ChainId,
-        loser_chain: ChainId,
-        stake: Amount,
-        rounds_played: u8,
-        // Combat statistics for player 1 (not used by prediction market, but needed for event compatibility)
-        player1_damage_dealt: u64,
-        player1_damage_taken: u64,
-        player1_crits: u64,
-        player1_dodges: u64,
-        player1_highest_crit: u64,
-        // Combat statistics for player 2 (not used by prediction market, but needed for event compatibility)
-        player2_damage_dealt: u64,
-        player2_damage_taken: u64,
-        player2_crits: u64,
-        player2_dodges: u64,
-        player2_highest_crit: u64,
-    },
-}
+// BattleEvent is now imported from battlechain-shared-events
 
 /// Prediction Market Chain Application ABI
 pub struct PredictionAbi;

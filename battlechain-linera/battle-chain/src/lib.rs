@@ -1,4 +1,5 @@
 use async_graphql::{Request, Response, Schema, EmptyMutation, EmptySubscription, SimpleObject};
+use battlechain_shared_events::{BattleEvent, CombatStats};
 use battlechain_shared_types::{
     derive_random_u64, mul_fp, random_in_range, CharacterSnapshot,
     FP_SCALE, MAX_COMBO_STACK, Owner, Stance,
@@ -40,40 +41,7 @@ impl ServiceAbi for BattleChainAbi {
     type QueryResponse = Response;
 }
 
-/// Event values emitted by battle-chain for cross-chain notifications
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum BattleEvent {
-    /// Battle started - emitted when battle begins
-    BattleStarted {
-        battle_chain: ChainId,
-        player1_chain: ChainId,
-        player2_chain: ChainId,
-        total_stake: Amount,
-    },
-
-    /// Battle completed - emitted when battle finishes
-    BattleCompleted {
-        battle_chain: ChainId,
-        player1_chain: ChainId,
-        player2_chain: ChainId,
-        winner_chain: ChainId,
-        loser_chain: ChainId,
-        stake: Amount,
-        rounds_played: u8,
-        // Combat statistics for player 1
-        player1_damage_dealt: u64,
-        player1_damage_taken: u64,
-        player1_crits: u64,
-        player1_dodges: u64,
-        player1_highest_crit: u64,
-        // Combat statistics for player 2
-        player2_damage_dealt: u64,
-        player2_damage_taken: u64,
-        player2_crits: u64,
-        player2_dodges: u64,
-        player2_highest_crit: u64,
-    },
-}
+// BattleEvent is now imported from battlechain-shared-events
 
 /// Battle status
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -1008,6 +976,22 @@ impl Contract for BattleContract {
                 let (p2_damage_dealt, p2_damage_taken, p2_crits, p2_dodges, p2_highest_crit) =
                     calculate_combat_stats(&round_results, &p2.owner);
 
+                let player1_stats = CombatStats::from_actions(
+                    p1_damage_dealt,
+                    p1_damage_taken,
+                    p1_crits,
+                    p1_dodges,
+                    p1_highest_crit,
+                );
+
+                let player2_stats = CombatStats::from_actions(
+                    p2_damage_dealt,
+                    p2_damage_taken,
+                    p2_crits,
+                    p2_dodges,
+                    p2_highest_crit,
+                );
+
                 let battle_chain_id = self.runtime.chain_id();
                 self.runtime.emit(
                     "battle_events".into(),
@@ -1019,16 +1003,8 @@ impl Contract for BattleContract {
                         loser_chain,
                         stake: total_stake,
                         rounds_played: *self.state.current_round.get(),
-                        player1_damage_dealt: p1_damage_dealt,
-                        player1_damage_taken: p1_damage_taken,
-                        player1_crits: p1_crits,
-                        player1_dodges: p1_dodges,
-                        player1_highest_crit: p1_highest_crit,
-                        player2_damage_dealt: p2_damage_dealt,
-                        player2_damage_taken: p2_damage_taken,
-                        player2_crits: p2_crits,
-                        player2_dodges: p2_dodges,
-                        player2_highest_crit: p2_highest_crit,
+                        player1_stats,
+                        player2_stats,
                     },
                 );
 

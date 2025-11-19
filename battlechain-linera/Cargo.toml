@@ -7,6 +7,7 @@ members = [
     "player-chain",
     "prediction-chain",
     "registry-chain",
+    "shared-events",
     "shared-types",
 ]
 
