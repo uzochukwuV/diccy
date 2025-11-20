@@ -16,10 +16,10 @@ mkdir -p /tmp/linera
 # Start local Linera network with faucet
 echo "🌐 Starting Linera network with faucet..."
 linera net up \
-    --storage-path /tmp/linera \
+    --storage /tmp/linera \
     --faucet-port 19100 \
     --testing-prng-seed 37 \
-    --num-shards 4
+    --shards 4
 
 echo "✅ Linera network started successfully!"
 echo ""

@@ -27,45 +27,46 @@ echo ""
 
 # Publish shared types (if needed)
 echo "📦 Shared types..."
-SHARED_TYPES_BYTECODE=$(linera publish-bytecode \
-  shared-types/target/wasm32-unknown-unknown/release/battlechain_shared_types_{contract,service}.wasm 2>/dev/null || echo "")
+echo ../target/wasm32-unknown-unknown/release/battlechain_shared_types_{contract,service}.wasm
+SHARED_TYPES_BYTECODE=$(linera publish-and-create \
+  ../target/wasm32-unknown-unknown/release/battlechain_shared_types_{contract,service}.wasm 2>/dev/null || echo "")
 if [ -n "$SHARED_TYPES_BYTECODE" ]; then
     echo -e "${GREEN}✅ Shared types bytecode: $SHARED_TYPES_BYTECODE${NC}"
 fi
 
 # Publish battle token
 echo "📦 Battle Token..."
-BATTLE_TOKEN_BYTECODE=$(linera publish-bytecode \
+BATTLE_TOKEN_BYTECODE=$(linera publish-and-create \
   battle-token/target/wasm32-unknown-unknown/release/battle_token_{contract,service}.wasm)
 echo -e "${GREEN}✅ Battle Token bytecode: $BATTLE_TOKEN_BYTECODE${NC}"
 
 # Publish player chain
 echo "📦 Player Chain..."
-PLAYER_BYTECODE=$(linera publish-bytecode \
+PLAYER_BYTECODE=$(linera publish-and-create \
   player-chain/target/wasm32-unknown-unknown/release/player_chain_{contract,service}.wasm)
 echo -e "${GREEN}✅ Player Chain bytecode: $PLAYER_BYTECODE${NC}"
 
 # Publish battle chain
 echo "📦 Battle Chain..."
-BATTLE_BYTECODE=$(linera publish-bytecode \
+BATTLE_BYTECODE=$(linera publish-and-create \
   battle-chain/target/wasm32-unknown-unknown/release/battle_chain_{contract,service}.wasm)
 echo -e "${GREEN}✅ Battle Chain bytecode: $BATTLE_BYTECODE${NC}"
 
 # Publish registry
 echo "📦 Registry Chain..."
-REGISTRY_BYTECODE=$(linera publish-bytecode \
+REGISTRY_BYTECODE=$(linera publish-and-create \
   registry-chain/target/wasm32-unknown-unknown/release/registry_chain_{contract,service}.wasm)
 echo -e "${GREEN}✅ Registry Chain bytecode: $REGISTRY_BYTECODE${NC}"
 
 # Publish prediction market
 echo "📦 Prediction Market..."
-PREDICTION_BYTECODE=$(linera publish-bytecode \
+PREDICTION_BYTECODE=$(linera publish-and-create \
   prediction-chain/target/wasm32-unknown-unknown/release/prediction_chain_{contract,service}.wasm)
 echo -e "${GREEN}✅ Prediction Market bytecode: $PREDICTION_BYTECODE${NC}"
 
 # Publish matchmaking
 echo "📦 Matchmaking Chain..."
-MATCHMAKING_BYTECODE=$(linera publish-bytecode \
+MATCHMAKING_BYTECODE=$(linera publish-and-create \
   matchmaking-chain/target/wasm32-unknown-unknown/release/matchmaking_chain_{contract,service}.wasm)
 echo -e "${GREEN}✅ Matchmaking Chain bytecode: $MATCHMAKING_BYTECODE${NC}"
 
