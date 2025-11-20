@@ -4,13 +4,14 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-async-graphql = "7.0.11"
+async-graphql = "=7.0.17"
+battlechain-shared-events = { path = "../shared-events" }
 battlechain-shared-types = { path = "../shared-types" }
-linera-sdk = { version = "0.15.5", features = ["wasmer"] }
-linera-views = { version = "0.15.5" }
+linera-sdk = { git = "https://github.com/linera-io/linera-protocol.git", tag = "v0.15.5", features = ["wasmer"] }
+linera-views = { git = "https://github.com/linera-io/linera-protocol.git", tag = "v0.15.5" }
 log = "0.4"
 serde = { version = "1.0", features = ["derive"] }
-thiserror = "2.0"
+thiserror = "1.0"
 
 [lib]
 crate-type = ["cdylib"]

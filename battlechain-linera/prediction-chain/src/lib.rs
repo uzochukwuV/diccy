@@ -9,38 +9,7 @@ use linera_sdk::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-// Battle event types for subscription (defined inline to avoid dependencies)
-/// Events emitted by battle-chain
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum BattleEvent {
-    BattleStarted {
-        battle_chain: ChainId,
-        player1_chain: ChainId,
-        player2_chain: ChainId,
-        total_stake: Amount,
-    },
-    BattleCompleted {
-        battle_chain: ChainId,
-        player1_chain: ChainId,
-        player2_chain: ChainId,
-        winner_chain: ChainId,
-        loser_chain: ChainId,
-        stake: Amount,
-        rounds_played: u8,
-        // Combat statistics for player 1 (not used by prediction market, but needed for event compatibility)
-        player1_damage_dealt: u64,
-        player1_damage_taken: u64,
-        player1_crits: u64,
-        player1_dodges: u64,
-        player1_highest_crit: u64,
-        // Combat statistics for player 2 (not used by prediction market, but needed for event compatibility)
-        player2_damage_dealt: u64,
-        player2_damage_taken: u64,
-        player2_crits: u64,
-        player2_dodges: u64,
-        player2_highest_crit: u64,
-    },
-}
+// BattleEvent is now imported from battlechain-shared-events
 
 /// Prediction Market Chain Application ABI
 pub struct PredictionAbi;
@@ -205,7 +174,7 @@ pub struct PredictionState {
     pub known_battle_chains: MapView<ChainId, bool>,
 
     /// SECURITY: Admin owner (for pause functionality)
-    pub admin: RegisterView<Owner>,
+    pub admin: RegisterView<Option<Owner>>,
 
     /// SECURITY: Paused state
     pub paused: RegisterView<bool>,
@@ -387,7 +356,7 @@ impl Contract for PredictionContract {
         self.state.created_at.set(now);
 
         // SECURITY: Initialize admin as treasury owner
-        self.state.admin.set(treasury_owner);
+        self.state.admin.set(Some(treasury_owner));
         self.state.paused.set(false);
     }
 
@@ -398,9 +367,10 @@ impl Contract for PredictionContract {
                 // Only admin can pause
                 let caller = self.runtime.authenticated_signer()
                     .ok_or(PredictionError::NotAuthorized)?;
-                let admin = *self.state.admin.get();
+                let admin = self.state.admin.get().as_ref()
+                    .ok_or(PredictionError::NotAuthorized)?;
 
-                if caller != admin {
+                if &caller != admin {
                     return Err(PredictionError::NotAuthorized);
                 }
 
@@ -413,9 +383,10 @@ impl Contract for PredictionContract {
                 // Only admin can unpause
                 let caller = self.runtime.authenticated_signer()
                     .ok_or(PredictionError::NotAuthorized)?;
-                let admin = *self.state.admin.get();
+                let admin = self.state.admin.get().as_ref()
+                    .ok_or(PredictionError::NotAuthorized)?;
 
-                if caller != admin {
+                if &caller != admin {
                     return Err(PredictionError::NotAuthorized);
                 }
 
@@ -428,13 +399,14 @@ impl Contract for PredictionContract {
                 // Only current admin can transfer
                 let caller = self.runtime.authenticated_signer()
                     .ok_or(PredictionError::NotAuthorized)?;
-                let admin = *self.state.admin.get();
+                let admin = self.state.admin.get().as_ref()
+                    .ok_or(PredictionError::NotAuthorized)?.clone();
 
                 if caller != admin {
                     return Err(PredictionError::NotAuthorized);
                 }
 
-                self.state.admin.set(*new_admin);
+                self.state.admin.set(Some(*new_admin));
                 log::info!("SECURITY: Admin transferred to {:?}", new_admin);
                 return Ok(());
             }

@@ -1,0 +1,12 @@
+[package]
+name = "battlechain-shared-events"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+linera-sdk = { git = "https://github.com/linera-io/linera-protocol.git", tag = "v0.15.5", features = ["wasmer"] }
+battlechain-shared-types = { path = "../shared-types" }
+
+[lib]
+crate-type = ["cdylib", "rlib"]

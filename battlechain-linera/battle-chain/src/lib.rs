@@ -1,11 +1,12 @@
 use async_graphql::{Request, Response, Schema, EmptyMutation, EmptySubscription, SimpleObject};
+use battlechain_shared_events::{BattleEvent, CombatStats};
 use battlechain_shared_types::{
     derive_random_u64, mul_fp, random_in_range, CharacterSnapshot,
     FP_SCALE, MAX_COMBO_STACK, Owner, Stance,
 };
 use linera_sdk::{
     abi::{ContractAbi, ServiceAbi, WithContractAbi, WithServiceAbi},
-    linera_base_types::{Account, Amount, ApplicationId, ChainId, Timestamp},
+    linera_base_types::{Amount, ApplicationId, ChainId, Timestamp},
     views::{RegisterView, RootView, View, ViewStorageContext},
     Contract, Service, ContractRuntime, ServiceRuntime,
 };
@@ -40,40 +41,7 @@ impl ServiceAbi for BattleChainAbi {
     type QueryResponse = Response;
 }
 
-/// Event values emitted by battle-chain for cross-chain notifications
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum BattleEvent {
-    /// Battle started - emitted when battle begins
-    BattleStarted {
-        battle_chain: ChainId,
-        player1_chain: ChainId,
-        player2_chain: ChainId,
-        total_stake: Amount,
-    },
-
-    /// Battle completed - emitted when battle finishes
-    BattleCompleted {
-        battle_chain: ChainId,
-        player1_chain: ChainId,
-        player2_chain: ChainId,
-        winner_chain: ChainId,
-        loser_chain: ChainId,
-        stake: Amount,
-        rounds_played: u8,
-        // Combat statistics for player 1
-        player1_damage_dealt: u64,
-        player1_damage_taken: u64,
-        player1_crits: u64,
-        player1_dodges: u64,
-        player1_highest_crit: u64,
-        // Combat statistics for player 2
-        player2_damage_dealt: u64,
-        player2_damage_taken: u64,
-        player2_crits: u64,
-        player2_dodges: u64,
-        player2_highest_crit: u64,
-    },
-}
+// BattleEvent is now imported from battlechain-shared-events
 
 /// Battle status
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -223,6 +191,7 @@ pub struct BattleState {
     /// Application references
     pub battle_token_app: RegisterView<Option<ApplicationId>>,
     pub matchmaking_chain: RegisterView<Option<ChainId>>,
+    pub prediction_chain_id: RegisterView<Option<ChainId>>,
 
     /// Platform fee (basis points, 300 = 3%)
     pub platform_fee_bps: RegisterView<u16>,
@@ -532,6 +501,7 @@ pub enum Message {
         player2: BattleParticipant,
         matchmaking_chain: ChainId,
         battle_token_app: ApplicationId,
+        prediction_chain_id: Option<ChainId>,
         platform_fee_bps: u16,
         treasury_owner: Owner,
     },
@@ -548,6 +518,17 @@ pub enum Message {
     BattleCompleted {
         winner: Owner,
         loser: Owner,
+    },
+
+    /// Notify prediction market that battle has started (close betting)
+    BattleStarted {
+        battle_chain: ChainId,
+    },
+
+    /// Notify prediction market of battle result (settle market)
+    BattleEnded {
+        battle_chain: ChainId,
+        winner_chain: ChainId,
     },
 }
 
@@ -754,6 +735,7 @@ impl Contract for BattleContract {
         // Initialize empty references (will be set via Initialize message)
         self.state.battle_token_app.set(None);
         self.state.matchmaking_chain.set(None);
+        self.state.prediction_chain_id.set(None);
         self.state.platform_fee_bps.set(300); // Default 3%
         self.state.treasury_owner.set(None);
 
@@ -841,10 +823,27 @@ impl Contract for BattleContract {
 
                     // Execute the round
                     let now = self.runtime.system_time();
+                    let current_round = *self.state.current_round.get();
+
                     if let Ok(round_result) = self.state.execute_full_round(now) {
                         let mut results = self.state.round_results.get().clone();
                         results.push(round_result.clone());
                         self.state.round_results.set(results);
+
+                        // If this is round 1, notify prediction market to close betting
+                        if current_round == 1 {
+                            if let Some(prediction_chain) = self.state.prediction_chain_id.get().as_ref() {
+                                let battle_chain = self.runtime.chain_id();
+                                self.runtime
+                                    .prepare_message(Message::BattleStarted {
+                                        battle_chain,
+                                    })
+                                    .with_authentication()
+                                    .send_to(*prediction_chain);
+
+                                log::info!("Sent BattleStarted message to prediction market");
+                            }
+                        }
 
                         // Check for winner
                         let p1 = self.state.player1.get().clone().unwrap();
@@ -987,13 +986,30 @@ impl Contract for BattleContract {
                         .send_to(*matchmaking_chain);
                 }
 
-                // Emit BattleCompleted event for cross-application subscriptions
-                // This allows prediction-chain and registry-chain to listen for battle results
+                // Determine winner and loser chains for prediction market
                 let winner_chain = if winner_owner == p1.owner {
                     p1.chain
                 } else {
                     p2.chain
                 };
+
+                // Notify prediction market of battle result
+                if let Some(prediction_chain) = self.state.prediction_chain_id.get().as_ref() {
+                    let battle_ended_message = Message::BattleEnded {
+                        battle_chain: self.runtime.chain_id(),
+                        winner_chain,
+                    };
+
+                    self.runtime
+                        .prepare_message(battle_ended_message)
+                        .with_authentication()
+                        .send_to(*prediction_chain);
+
+                    log::info!("Sent BattleEnded message to prediction market");
+                }
+
+                // Emit BattleCompleted event for cross-application subscriptions
+                // This allows prediction-chain and registry-chain to listen for battle results
 
                 let loser_chain = if winner_owner == p1.owner {
                     p2.chain
@@ -1008,6 +1024,22 @@ impl Contract for BattleContract {
                 let (p2_damage_dealt, p2_damage_taken, p2_crits, p2_dodges, p2_highest_crit) =
                     calculate_combat_stats(&round_results, &p2.owner);
 
+                let player1_stats = CombatStats::from_actions(
+                    p1_damage_dealt,
+                    p1_damage_taken,
+                    p1_crits,
+                    p1_dodges,
+                    p1_highest_crit,
+                );
+
+                let player2_stats = CombatStats::from_actions(
+                    p2_damage_dealt,
+                    p2_damage_taken,
+                    p2_crits,
+                    p2_dodges,
+                    p2_highest_crit,
+                );
+
                 let battle_chain_id = self.runtime.chain_id();
                 self.runtime.emit(
                     "battle_events".into(),
@@ -1019,16 +1051,8 @@ impl Contract for BattleContract {
                         loser_chain,
                         stake: total_stake,
                         rounds_played: *self.state.current_round.get(),
-                        player1_damage_dealt: p1_damage_dealt,
-                        player1_damage_taken: p1_damage_taken,
-                        player1_crits: p1_crits,
-                        player1_dodges: p1_dodges,
-                        player1_highest_crit: p1_highest_crit,
-                        player2_damage_dealt: p2_damage_dealt,
-                        player2_damage_taken: p2_damage_taken,
-                        player2_crits: p2_crits,
-                        player2_dodges: p2_dodges,
-                        player2_highest_crit: p2_highest_crit,
+                        player1_stats,
+                        player2_stats,
                     },
                 );
 
@@ -1048,6 +1072,7 @@ impl Contract for BattleContract {
                 player2,
                 matchmaking_chain,
                 battle_token_app,
+                prediction_chain_id,
                 platform_fee_bps,
                 treasury_owner,
             } => {
@@ -1097,6 +1122,7 @@ impl Contract for BattleContract {
                 // Initialize configuration
                 self.state.battle_token_app.set(Some(battle_token_app));
                 self.state.matchmaking_chain.set(Some(matchmaking_chain));
+                self.state.prediction_chain_id.set(prediction_chain_id);
                 self.state.platform_fee_bps.set(platform_fee_bps);
                 self.state.treasury_owner.set(Some(treasury_owner));
 
@@ -1133,7 +1159,10 @@ impl Contract for BattleContract {
                 );
             }
 
-            Message::BattleResult { .. } | Message::BattleCompleted { .. } => {
+            Message::BattleResult { .. }
+            | Message::BattleCompleted { .. }
+            | Message::BattleStarted { .. }
+            | Message::BattleEnded { .. } => {
                 // These are outgoing messages, not handled here
                 log::warn!("Received outgoing message type - ignoring");
             }

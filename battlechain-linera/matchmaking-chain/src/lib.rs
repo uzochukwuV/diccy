@@ -50,16 +50,27 @@ impl BattleParticipant {
     }
 }
 
-/// Messages to send to battle chain
+// Prediction chain types (defined inline to avoid circular dependencies)
+/// Prediction Market Chain Application ABI
+pub struct PredictionAbi;
+
+impl ContractAbi for PredictionAbi {
+    type Operation = PredictionOperation;
+    type Response = Result<(), String>; // Simplified error type
+}
+
+impl ServiceAbi for PredictionAbi {
+    type Query = Request;
+    type QueryResponse = Response;
+}
+
+/// Operations to call on prediction chain
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum BattleMessage {
-    Initialize {
-        player1: BattleParticipant,
-        player2: BattleParticipant,
-        matchmaking_chain: ChainId,
-        battle_token_app: ApplicationId,
-        platform_fee_bps: u16,
-        treasury_owner: Owner,
+pub enum PredictionOperation {
+    CreateMarket {
+        battle_chain: ChainId,
+        player1_chain: ChainId,
+        player2_chain: ChainId,
     },
 }
 
@@ -128,6 +139,9 @@ pub struct MatchmakingState {
     /// Battle token application ID
     pub battle_token_app: RegisterView<Option<ApplicationId>>,
 
+    /// Prediction market application ID (typed for cross-application calls)
+    pub prediction_app_id: RegisterView<Option<ApplicationId<PredictionAbi>>>,
+
     /// Platform fee basis points (300 = 3%)
     pub platform_fee_bps: RegisterView<u16>,
 
@@ -173,14 +187,22 @@ impl MatchmakingState {
         Ok(entry)
     }
 
-    /// Find a match for a player
-    pub async fn find_match(&self, _player_chain: &ChainId) -> Option<(ChainId, QueueEntry)> {
-        // Simple FIFO matching: find first available opponent
-        // TODO: Implement skill-based matchmaking
-        // We need to iterate through waiting players to find an opponent
-        // For now, this is a placeholder - in practice we'd need to collect keys first
-        // Since we can't easily iterate MapView, we'll handle this in the contract
+    /// Find a match for a player (simple FIFO matching)
+    pub async fn find_match(&self, player_chain: &ChainId) -> Option<(ChainId, QueueEntry)> {
+        // Get all waiting player chain IDs
+        let waiting_keys = self.waiting_players.indices().await.ok()?;
 
+        // Find first opponent that's not the player themselves
+        for opponent_chain in waiting_keys {
+            if &opponent_chain != player_chain {
+                // Found an opponent! Get their queue entry
+                if let Ok(Some(entry)) = self.waiting_players.get(&opponent_chain).await {
+                    return Some((opponent_chain, entry));
+                }
+            }
+        }
+
+        // No opponents found
         None
     }
 }
@@ -318,56 +340,40 @@ impl MatchmakingContract {
             total_stake, // Initial balance for the battle chain
         );
 
-        // === CRITICAL: Send Initialize message to trigger automatic deployment ===
-        // This message will cause Linera to automatically deploy the battle application
-        // to the newly created chain (because battle_app_id is in required_application_ids)
-
-        // Create battle participants from queue entries
-        let participant1 = BattleParticipant::new(
-            pending.player1.player_owner,
-            pending.player1.player_chain,
-            pending.player1.character.clone(),
-            pending.player1.stake,
-        );
-
-        let participant2 = BattleParticipant::new(
-            pending.player2.player_owner,
-            pending.player2.player_chain,
-            pending.player2.character.clone(),
-            pending.player2.stake,
-        );
-
-        // Send initialization message to battle chain
-        // Linera will auto-deploy the battle application when it sees this message!
-        let battle_token_app = self.state.battle_token_app.get()
-            .expect("Battle token app must be configured");
-        let platform_fee_bps = *self.state.platform_fee_bps.get();
-        let treasury_owner = self.state.treasury_owner.get()
-            .expect("Treasury owner must be configured");
-
-        // TODO: Send initialization message to battle chain
-        // This requires understanding the correct Linera SDK method for cross-chain messaging
-        // For now, the battle chain initialization will use the Parameters during deployment
-        // instead of the Initialize message
-        log::warn!(
-            "Battle chain created at {:?} - manual initialization may be required",
-            battle_chain_id
-        );
-
-        // Store the initialization data for later use
-        let _init_data = BattleMessage::Initialize {
-            player1: participant1,
-            player2: participant2,
-            matchmaking_chain: self.runtime.chain_id(),
-            battle_token_app: battle_token_app.clone(),
-            platform_fee_bps,
-            treasury_owner: treasury_owner.clone(),
-        };
-
+        // Battle chain initialization happens via deployment parameters
+        // The battle application will be auto-deployed to the new chain with the
+        // application_id from required_application_ids set during chain creation
         log::info!(
-            "Sent Initialize message to battle chain {:?} - auto-deployment will occur",
+            "Battle chain created at {:?} - will be initialized via deployment parameters",
             battle_chain_id
         );
+
+        // Create prediction market automatically
+        if let Some(prediction_app) = self.state.prediction_app_id.get().as_ref() {
+            let create_market_op = PredictionOperation::CreateMarket {
+                battle_chain: battle_chain_id,
+                player1_chain: pending.player1.player_chain,
+                player2_chain: pending.player2.player_chain,
+            };
+
+            // Call prediction chain synchronously to create market
+            let result = self.runtime.call_application(
+                true,  // authenticated call
+                prediction_app.clone(),
+                &create_market_op,
+            );
+
+            match result {
+                Ok(_) => log::info!(
+                    "Created prediction market for battle {:?}",
+                    battle_chain_id
+                ),
+                Err(e) => log::warn!(
+                    "Failed to create prediction market for battle {:?}: {}",
+                    battle_chain_id, e
+                ),
+            }
+        }
 
         // Store battle metadata
         let metadata = BattleMetadata {
@@ -425,6 +431,7 @@ impl Contract for MatchmakingContract {
         self.state.min_stake.set(min_stake);
         self.state.battle_app_id.set(None);
         self.state.battle_token_app.set(None);
+        self.state.prediction_app_id.set(None);
         self.state.platform_fee_bps.set(300); // 3% default
         self.state.treasury_owner.set(None);
         self.state.created_at.set(now);
@@ -446,8 +453,70 @@ impl Contract for MatchmakingContract {
                 self.state.add_waiting_player(entry)
                     .expect("Failed to add player to queue");
 
-                // TODO: Implement automatic matchmaking
-                // For now, matchmaking must be triggered manually via CreateBattleOffer
+                // Automatic matchmaking: Try to find an opponent
+                if let Some((opponent_chain, opponent_entry)) = self.state.find_match(&player_chain).await {
+                    log::info!(
+                        "Match found! {:?} vs {:?}",
+                        player_chain,
+                        opponent_chain
+                    );
+
+                    // Get the newly added player entry
+                    let player_entry = self.state.waiting_players.get(&player_chain).await
+                        .expect("View error")
+                        .expect("Player entry should exist");
+
+                    // Create pending battle
+                    let offer_id = *self.state.next_offer_id.get();
+                    self.state.next_offer_id.set(offer_id + 1);
+
+                    let pending = PendingBattle {
+                        offer_id,
+                        player1: player_entry,
+                        player2: opponent_entry.clone(),
+                        created_at: now,
+                        player1_confirmed: false,
+                        player2_confirmed: false,
+                    };
+
+                    self.state.pending_battles.insert(&offer_id, pending)
+                        .expect("Failed to insert pending battle");
+
+                    // Remove both players from waiting queue
+                    self.state.waiting_players.remove(&player_chain)
+                        .expect("Failed to remove player");
+                    self.state.waiting_players.remove(&opponent_chain)
+                        .expect("Failed to remove opponent");
+
+                    // Send battle offer notifications to both players
+                    let offer_msg_p1 = Message::BattleOffer {
+                        offer_id,
+                        opponent_chain,
+                        stake: opponent_entry.stake,
+                    };
+                    let offer_msg_p2 = Message::BattleOffer {
+                        offer_id,
+                        opponent_chain: player_chain,
+                        stake,
+                    };
+
+                    self.runtime
+                        .prepare_message(offer_msg_p1)
+                        .with_authentication()
+                        .send_to(player_chain);
+
+                    self.runtime
+                        .prepare_message(offer_msg_p2)
+                        .with_authentication()
+                        .send_to(opponent_chain);
+
+                    log::info!("Battle offer {} created and sent to both players", offer_id);
+                } else {
+                    log::info!(
+                        "Player {:?} added to queue, waiting for opponent...",
+                        player_chain
+                    );
+                }
             }
 
             Operation::LeaveQueue { player_chain } => {
