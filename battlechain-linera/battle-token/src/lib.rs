@@ -1,4 +1,4 @@
-use async_graphql::{Request, Response, Schema, EmptySubscription, SimpleObject};
+use async_graphql::{Request, Response, Schema, EmptySubscription, SimpleObject, Object};
 use linera_sdk::{
     abi::{ContractAbi, ServiceAbi, WithContractAbi, WithServiceAbi},
     linera_base_types::{AccountOwner, Amount, ChainId, Timestamp},
@@ -580,9 +580,25 @@ impl Service for BattleTokenService {
     }
 }
 
+/// Balance information for GraphQL
+#[derive(Clone, SimpleObject)]
+pub struct BalanceInfo {
+    pub owner: String,
+    pub amount: String,
+}
+
+/// Allowance information for GraphQL
+#[derive(Clone, SimpleObject)]
+pub struct AllowanceInfo {
+    pub owner: String,
+    pub spender: String,
+    pub amount: String,
+}
+
 /// GraphQL Query Root
 #[derive(Clone)]
 struct QueryRoot {
+    // Cache frequently accessed values
     name: String,
     symbol: String,
     decimals: u8,
@@ -590,10 +606,38 @@ struct QueryRoot {
     total_burned: Amount,
     total_holders: u64,
     total_transfers: u64,
+    // Store balances and allowances as GraphQL-ready structs
+    balances: Vec<BalanceInfo>,
+    allowances: Vec<AllowanceInfo>,
 }
 
 impl QueryRoot {
     async fn new(state: &BattleTokenState) -> Self {
+        // Pre-load all balances for queries
+        let balance_keys = state.balances.indices().await.expect("Failed to get balance keys");
+        let mut balances = Vec::new();
+        for key in balance_keys {
+            if let Some(amount) = state.balances.get(&key).await.expect("Failed to get balance") {
+                balances.push(BalanceInfo {
+                    owner: format!("{:?}", key),  // Serialize Owner to string
+                    amount: amount.to_string(),
+                });
+            }
+        }
+
+        // Pre-load all allowances for queries
+        let allowance_keys = state.allowances.indices().await.expect("Failed to get allowance keys");
+        let mut allowances = Vec::new();
+        for key in allowance_keys {
+            if let Some(amount) = state.allowances.get(&key).await.expect("Failed to get allowance") {
+                allowances.push(AllowanceInfo {
+                    owner: format!("{:?}", key.0),  // Serialize owner to string
+                    spender: format!("{:?}", key.1),  // Serialize spender to string
+                    amount: amount.to_string(),
+                });
+            }
+        }
+
         Self {
             name: state.name.get().clone(),
             symbol: state.symbol.get().clone(),
@@ -602,11 +646,13 @@ impl QueryRoot {
             total_burned: *state.total_burned.get(),
             total_holders: *state.total_holders.get(),
             total_transfers: *state.total_transfers.get(),
+            balances,
+            allowances,
         }
     }
 }
 
-#[async_graphql::Object]
+#[Object]
 impl QueryRoot {
     /// Token name
     async fn name(&self) -> String {
@@ -638,17 +684,14 @@ impl QueryRoot {
         self.total_supply.saturating_sub(self.total_burned).to_string()
     }
 
-    /// Get balance of account
-    async fn balance_of(&self, _account: String) -> String {
-        // For now, return zero - need proper Owner parsing
-        // TODO: Parse Owner from string and query balance
-        "0".to_string()
+    /// Get all account balances (microcard pattern)
+    async fn balances(&self) -> Vec<BalanceInfo> {
+        self.balances.clone()
     }
 
-    /// Get allowance
-    async fn allowance(&self, _owner: String, _spender: String) -> String {
-        // TODO: Parse Owner from strings and query allowance
-        "0".to_string()
+    /// Get all allowances (microcard pattern)
+    async fn allowances(&self) -> Vec<AllowanceInfo> {
+        self.allowances.clone()
     }
 
     /// Total number of token holders

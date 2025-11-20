@@ -173,14 +173,22 @@ impl MatchmakingState {
         Ok(entry)
     }
 
-    /// Find a match for a player
-    pub async fn find_match(&self, _player_chain: &ChainId) -> Option<(ChainId, QueueEntry)> {
-        // Simple FIFO matching: find first available opponent
-        // TODO: Implement skill-based matchmaking
-        // We need to iterate through waiting players to find an opponent
-        // For now, this is a placeholder - in practice we'd need to collect keys first
-        // Since we can't easily iterate MapView, we'll handle this in the contract
+    /// Find a match for a player (simple FIFO matching)
+    pub async fn find_match(&self, player_chain: &ChainId) -> Option<(ChainId, QueueEntry)> {
+        // Get all waiting player chain IDs
+        let waiting_keys = self.waiting_players.indices().await.ok()?;
 
+        // Find first opponent that's not the player themselves
+        for opponent_chain in waiting_keys {
+            if &opponent_chain != player_chain {
+                // Found an opponent! Get their queue entry
+                if let Ok(Some(entry)) = self.waiting_players.get(&opponent_chain).await {
+                    return Some((opponent_chain, entry));
+                }
+            }
+        }
+
+        // No opponents found
         None
     }
 }
@@ -446,8 +454,70 @@ impl Contract for MatchmakingContract {
                 self.state.add_waiting_player(entry)
                     .expect("Failed to add player to queue");
 
-                // TODO: Implement automatic matchmaking
-                // For now, matchmaking must be triggered manually via CreateBattleOffer
+                // Automatic matchmaking: Try to find an opponent
+                if let Some((opponent_chain, opponent_entry)) = self.state.find_match(&player_chain).await {
+                    log::info!(
+                        "Match found! {:?} vs {:?}",
+                        player_chain,
+                        opponent_chain
+                    );
+
+                    // Get the newly added player entry
+                    let player_entry = self.state.waiting_players.get(&player_chain).await
+                        .expect("View error")
+                        .expect("Player entry should exist");
+
+                    // Create pending battle
+                    let offer_id = *self.state.next_offer_id.get();
+                    self.state.next_offer_id.set(offer_id + 1);
+
+                    let pending = PendingBattle {
+                        offer_id,
+                        player1: player_entry,
+                        player2: opponent_entry.clone(),
+                        created_at: now,
+                        player1_confirmed: false,
+                        player2_confirmed: false,
+                    };
+
+                    self.state.pending_battles.insert(&offer_id, pending)
+                        .expect("Failed to insert pending battle");
+
+                    // Remove both players from waiting queue
+                    self.state.waiting_players.remove(&player_chain)
+                        .expect("Failed to remove player");
+                    self.state.waiting_players.remove(&opponent_chain)
+                        .expect("Failed to remove opponent");
+
+                    // Send battle offer notifications to both players
+                    let offer_msg_p1 = Message::BattleOffer {
+                        offer_id,
+                        opponent_chain,
+                        stake: opponent_entry.stake,
+                    };
+                    let offer_msg_p2 = Message::BattleOffer {
+                        offer_id,
+                        opponent_chain: player_chain,
+                        stake,
+                    };
+
+                    self.runtime
+                        .prepare_message(offer_msg_p1)
+                        .with_authentication()
+                        .send_to(player_chain);
+
+                    self.runtime
+                        .prepare_message(offer_msg_p2)
+                        .with_authentication()
+                        .send_to(opponent_chain);
+
+                    log::info!("Battle offer {} created and sent to both players", offer_id);
+                } else {
+                    log::info!(
+                        "Player {:?} added to queue, waiting for opponent...",
+                        player_chain
+                    );
+                }
             }
 
             Operation::LeaveQueue { player_chain } => {
