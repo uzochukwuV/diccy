@@ -224,7 +224,7 @@ pub struct RegistryState {
     pub known_battle_chains: MapView<ChainId, bool>,
 
     /// SECURITY: Admin owner (for pause functionality)
-    pub admin: RegisterView<Owner>,
+    pub admin: RegisterView<Option<Owner>>,
 
     /// SECURITY: Paused state
     pub paused: RegisterView<bool>,
@@ -429,12 +429,26 @@ impl Contract for RegistryContract {
     async fn instantiate(&mut self, _argument: ()) {
         let now = self.runtime.system_time();
 
+        // Get creator as admin
+        let chain_ownership = self.runtime.chain_ownership();
+        let creator = chain_ownership
+            .super_owners
+            .iter()
+            .next()
+            .expect("No super owners found")
+            .clone();
+
         self.state.next_battle_id.set(0);
         self.state.total_characters.set(0);
         self.state.total_battles.set(0);
         self.state.total_volume.set(Amount::ZERO);
         self.state.top_elo.set(Vec::new());
         self.state.created_at.set(now);
+
+        // SECURITY: Initialize admin and paused state
+        self.state.admin.set(Some(creator));
+        self.state.paused.set(false);
+        log::info!("Registry initialized with admin: {:?}", creator);
     }
 
     async fn execute_operation(&mut self, operation: Operation) -> Self::Response {
@@ -586,8 +600,9 @@ impl Contract for RegistryContract {
                 // SECURITY: Only admin can pause
                 let caller = self.runtime.authenticated_signer()
                     .ok_or(RegistryError::NotAuthorized)?;
-                let admin = *self.state.admin.get();
-                if caller != admin {
+                let admin = self.state.admin.get().as_ref()
+                    .ok_or(RegistryError::NotAuthorized)?;
+                if &caller != admin {
                     return Err(RegistryError::NotAuthorized);
                 }
                 self.state.paused.set(true);
@@ -598,8 +613,9 @@ impl Contract for RegistryContract {
                 // SECURITY: Only admin can unpause
                 let caller = self.runtime.authenticated_signer()
                     .ok_or(RegistryError::NotAuthorized)?;
-                let admin = *self.state.admin.get();
-                if caller != admin {
+                let admin = self.state.admin.get().as_ref()
+                    .ok_or(RegistryError::NotAuthorized)?;
+                if &caller != admin {
                     return Err(RegistryError::NotAuthorized);
                 }
                 self.state.paused.set(false);
@@ -610,11 +626,12 @@ impl Contract for RegistryContract {
                 // SECURITY: Only current admin can transfer admin rights
                 let caller = self.runtime.authenticated_signer()
                     .ok_or(RegistryError::NotAuthorized)?;
-                let admin = *self.state.admin.get();
+                let admin = self.state.admin.get().as_ref()
+                    .ok_or(RegistryError::NotAuthorized)?.clone();
                 if caller != admin {
                     return Err(RegistryError::NotAuthorized);
                 }
-                self.state.admin.set(new_admin);
+                self.state.admin.set(Some(new_admin));
                 log::info!("Registry admin transferred from {:?} to {:?}", admin, new_admin);
             }
         }

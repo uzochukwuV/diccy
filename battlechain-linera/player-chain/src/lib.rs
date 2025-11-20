@@ -56,7 +56,7 @@ pub struct PlayerChainState {
     pub known_battle_chains: MapView<ChainId, bool>,
 
     /// SECURITY: Admin owner (for pause functionality)
-    pub admin: RegisterView<Owner>,
+    pub admin: RegisterView<Option<Owner>>,
 
     /// SECURITY: Paused state
     pub paused: RegisterView<bool>,
@@ -288,7 +288,7 @@ impl Contract for PlayerChainContract {
 
                 // Set admin to the chain owner on initialization
                 if let Some(owner) = self.runtime.authenticated_signer() {
-                    self.state.admin.set(owner);
+                    self.state.admin.set(Some(owner));
                 }
                 self.state.paused.set(false);
             }
@@ -384,8 +384,9 @@ impl Contract for PlayerChainContract {
                 // SECURITY: Only admin can pause
                 let caller = self.runtime.authenticated_signer()
                     .expect("Operation must be authenticated");
-                let admin = *self.state.admin.get();
-                if caller != admin {
+                let admin = self.state.admin.get().as_ref()
+                    .expect("Admin not set");
+                if &caller != admin {
                     panic!("Only admin can pause the contract");
                 }
                 self.state.paused.set(true);
@@ -396,8 +397,9 @@ impl Contract for PlayerChainContract {
                 // SECURITY: Only admin can unpause
                 let caller = self.runtime.authenticated_signer()
                     .expect("Operation must be authenticated");
-                let admin = *self.state.admin.get();
-                if caller != admin {
+                let admin = self.state.admin.get().as_ref()
+                    .expect("Admin not set");
+                if &caller != admin {
                     panic!("Only admin can unpause the contract");
                 }
                 self.state.paused.set(false);
@@ -408,11 +410,12 @@ impl Contract for PlayerChainContract {
                 // SECURITY: Only current admin can transfer admin rights
                 let caller = self.runtime.authenticated_signer()
                     .expect("Operation must be authenticated");
-                let admin = *self.state.admin.get();
+                let admin = self.state.admin.get().as_ref()
+                    .expect("Admin not set").clone();
                 if caller != admin {
                     panic!("Only admin can transfer admin rights");
                 }
-                self.state.admin.set(new_admin);
+                self.state.admin.set(Some(new_admin));
                 log::info!("Admin transferred from {:?} to {:?}", admin, new_admin);
             }
         }

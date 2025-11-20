@@ -175,7 +175,7 @@ pub struct PredictionState {
     pub known_battle_chains: MapView<ChainId, bool>,
 
     /// SECURITY: Admin owner (for pause functionality)
-    pub admin: RegisterView<Owner>,
+    pub admin: RegisterView<Option<Owner>>,
 
     /// SECURITY: Paused state
     pub paused: RegisterView<bool>,
@@ -357,7 +357,7 @@ impl Contract for PredictionContract {
         self.state.created_at.set(now);
 
         // SECURITY: Initialize admin as treasury owner
-        self.state.admin.set(treasury_owner);
+        self.state.admin.set(Some(treasury_owner));
         self.state.paused.set(false);
     }
 
@@ -368,9 +368,10 @@ impl Contract for PredictionContract {
                 // Only admin can pause
                 let caller = self.runtime.authenticated_signer()
                     .ok_or(PredictionError::NotAuthorized)?;
-                let admin = *self.state.admin.get();
+                let admin = self.state.admin.get().as_ref()
+                    .ok_or(PredictionError::NotAuthorized)?;
 
-                if caller != admin {
+                if &caller != admin {
                     return Err(PredictionError::NotAuthorized);
                 }
 
@@ -383,9 +384,10 @@ impl Contract for PredictionContract {
                 // Only admin can unpause
                 let caller = self.runtime.authenticated_signer()
                     .ok_or(PredictionError::NotAuthorized)?;
-                let admin = *self.state.admin.get();
+                let admin = self.state.admin.get().as_ref()
+                    .ok_or(PredictionError::NotAuthorized)?;
 
-                if caller != admin {
+                if &caller != admin {
                     return Err(PredictionError::NotAuthorized);
                 }
 
@@ -398,13 +400,14 @@ impl Contract for PredictionContract {
                 // Only current admin can transfer
                 let caller = self.runtime.authenticated_signer()
                     .ok_or(PredictionError::NotAuthorized)?;
-                let admin = *self.state.admin.get();
+                let admin = self.state.admin.get().as_ref()
+                    .ok_or(PredictionError::NotAuthorized)?.clone();
 
                 if caller != admin {
                     return Err(PredictionError::NotAuthorized);
                 }
 
-                self.state.admin.set(*new_admin);
+                self.state.admin.set(Some(*new_admin));
                 log::info!("SECURITY: Admin transferred to {:?}", new_admin);
                 return Ok(());
             }

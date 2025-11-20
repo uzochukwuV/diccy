@@ -34,6 +34,9 @@ pub struct BattleTokenState {
     pub decimals: RegisterView<u8>,
     pub total_supply: RegisterView<Amount>,
 
+    /// Admin account (can mint tokens)
+    pub admin: RegisterView<Option<Owner>>,
+
     /// Account balances (Owner -> Amount)
     pub balances: MapView<Owner, Amount>,
 
@@ -368,6 +371,10 @@ impl Contract for BattleTokenContract {
         self.state.created_at.set(now);
         self.state.last_activity.set(now);
 
+        // Set creator as admin
+        self.state.admin.set(Some(creator.clone()));
+        log::info!("BattleChain Token initialized with admin: {:?}", creator);
+
         // Mint initial supply to creator
         self.state.balances.insert(&creator, initial_supply).expect("Failed to set initial balance");
         let mut accounts = self.state.accounts.get().clone();
@@ -386,8 +393,11 @@ impl Contract for BattleTokenContract {
             Operation::Transfer { to, amount } => {
                 match self.state.transfer(caller, to, amount, now).await {
                     Ok(_) => {
+                        log::info!("Transfer successful: {:?} -> {:?}, amount: {}", caller, to, amount);
                     }
-                    Err(_e) => {
+                    Err(e) => {
+                        log::error!("Transfer failed: {:?} -> {:?}, amount: {}, error: {:?}", caller, to, amount, e);
+                        panic!("Transfer failed: {:?}", e);
                     }
                 }
             }
@@ -395,8 +405,11 @@ impl Contract for BattleTokenContract {
             Operation::Approve { spender, amount } => {
                 match self.state.approve(caller, spender, amount).await {
                     Ok(_) => {
+                        log::info!("Approval successful: owner {:?} approved {:?} to spend {}", caller, spender, amount);
                     }
-                    Err(_e) => {
+                    Err(e) => {
+                        log::error!("Approval failed: owner {:?}, spender {:?}, amount: {}, error: {:?}", caller, spender, amount, e);
+                        panic!("Approval failed: {:?}", e);
                     }
                 }
             }
@@ -404,8 +417,11 @@ impl Contract for BattleTokenContract {
             Operation::TransferFrom { from, to, amount } => {
                 match self.state.transfer_from(caller, from, to, amount, now).await {
                     Ok(_) => {
+                        log::info!("TransferFrom successful: spender {:?} transferred {} from {:?} to {:?}", caller, amount, from, to);
                     }
-                    Err(_e) => {
+                    Err(e) => {
+                        log::error!("TransferFrom failed: spender {:?}, from {:?}, to {:?}, amount: {}, error: {:?}", caller, from, to, amount, e);
+                        panic!("TransferFrom failed: {:?}", e);
                     }
                 }
             }
@@ -413,30 +429,50 @@ impl Contract for BattleTokenContract {
             Operation::Burn { amount } => {
                 match self.state.burn(caller, amount, now).await {
                     Ok(_) => {
+                        log::info!("Burn successful: {:?} burned {}", caller, amount);
                     }
-                    Err(_e) => {
+                    Err(e) => {
+                        log::error!("Burn failed: {:?}, amount: {}, error: {:?}", caller, amount, e);
+                        panic!("Burn failed: {:?}", e);
                     }
                 }
             }
 
             Operation::Mint { to, amount } => {
-                // TODO: Add admin check
-                // For now, only allow minting during initialization or by specific authority
+                // SECURITY: Only admin can mint tokens
+                let admin = self.state.admin.get().as_ref();
+                if admin != Some(&caller) {
+                    log::error!("Unauthorized mint attempt: {:?} tried to mint {} to {:?}. Only admin {:?} can mint.", caller, amount, to, admin);
+                    panic!("Unauthorized: Only admin can mint tokens");
+                }
+
                 match self.state.mint(to, amount, now).await {
                     Ok(_) => {
+                        log::info!("Mint successful: admin {:?} minted {} to {:?}", caller, amount, to);
                     }
-                    Err(_e) => {
+                    Err(e) => {
+                        log::error!("Mint failed: admin {:?}, to {:?}, amount: {}, error: {:?}", caller, to, amount, e);
+                        panic!("Mint failed: {:?}", e);
                     }
                 }
             }
 
             Operation::Claim { amount } => {
                 // For reward claims or initial distribution
-                // TODO: Implement claim logic with verification
+                // SECURITY: Only admin can approve claims
+                let admin = self.state.admin.get().as_ref();
+                if admin != Some(&caller) {
+                    log::error!("Unauthorized claim attempt: {:?} tried to claim {}. Only admin {:?} can process claims.", caller, amount, admin);
+                    panic!("Unauthorized: Only admin can process claims");
+                }
+
                 match self.state.mint(caller, amount, now).await {
                     Ok(_) => {
+                        log::info!("Claim successful: admin {:?} claimed {}", caller, amount);
                     }
-                    Err(_e) => {
+                    Err(e) => {
+                        log::error!("Claim failed: {:?}, amount: {}, error: {:?}", caller, amount, e);
+                        panic!("Claim failed: {:?}", e);
                     }
                 }
             }
@@ -456,26 +492,48 @@ impl Contract for BattleTokenContract {
                 // Deduct from sender on this chain
                 match self.state.balance_of(&from).await {
                     balance if balance >= amount => {
-                        if let Ok(_) = self.state.transfer(from, to, amount, now).await {
-                            // TODO: Send credit message to target chain
-                            // self.runtime.send_message(target_chain, Message::Credit { recipient: to, amount });
+                        match self.state.transfer(from, to, amount, now).await {
+                            Ok(_) => {
+                                log::info!("Cross-chain transfer debit successful: {:?} -> {:?}, amount: {}", from, to, amount);
+                                // TODO: Send credit message to target chain
+                                // self.runtime.send_message(target_chain, Message::Credit { recipient: to, amount });
+                            }
+                            Err(e) => {
+                                log::error!("Cross-chain transfer debit failed: {:?} -> {:?}, amount: {}, error: {:?}", from, to, amount, e);
+                                panic!("Cross-chain transfer debit failed: {:?}", e);
+                            }
                         }
                     }
-                    _ => {
-                        // Insufficient balance
+                    balance => {
+                        log::error!("Insufficient balance for cross-chain transfer: {:?} has {}, needs {}", from, balance, amount);
+                        panic!("Insufficient balance for cross-chain transfer");
                     }
                 }
             }
 
             Message::Credit { recipient, amount } => {
                 // Credit tokens received from another chain
-                if let Ok(_) = self.state.mint(recipient, amount, now).await {
+                match self.state.mint(recipient, amount, now).await {
+                    Ok(_) => {
+                        log::info!("Cross-chain credit successful: minted {} to {:?}", amount, recipient);
+                    }
+                    Err(e) => {
+                        log::error!("Cross-chain credit failed: recipient {:?}, amount: {}, error: {:?}", recipient, amount, e);
+                        panic!("Cross-chain credit failed: {:?}", e);
+                    }
                 }
             }
 
             Message::Debit { sender, amount } => {
                 // Confirmation of tokens sent to another chain
-                if let Ok(_) = self.state.burn(sender, amount, now).await {
+                match self.state.burn(sender, amount, now).await {
+                    Ok(_) => {
+                        log::info!("Cross-chain debit confirmation successful: burned {} from {:?}", amount, sender);
+                    }
+                    Err(e) => {
+                        log::error!("Cross-chain debit confirmation failed: sender {:?}, amount: {}, error: {:?}", sender, amount, e);
+                        panic!("Cross-chain debit confirmation failed: {:?}", e);
+                    }
                 }
             }
         }
