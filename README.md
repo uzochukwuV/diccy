@@ -1,3 +1,4 @@
+export PATH="$HOME/.cargo/bin:$PATH"
 # 🎮 BattleChain - On-Chain Fighting Game
 
 A fully on-chain turn-based fighting game built with Linera Protocol's microchains architecture.
