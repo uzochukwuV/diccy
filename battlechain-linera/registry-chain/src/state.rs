@@ -3,9 +3,8 @@ use linera_sdk::{
     linera_base_types::{Amount, ChainId, Timestamp},
     views::{MapView, RegisterView, RootView, ViewStorageContext},
 };
+use registry_chain::RegistryError;
 use serde::{Deserialize, Serialize};
-
-use crate::RegistryError;
 
 /// Character statistics in the global registry
 #[derive(Debug, Clone, Serialize, Deserialize)]

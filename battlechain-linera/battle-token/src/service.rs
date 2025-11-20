@@ -1,12 +1,16 @@
+#![cfg_attr(target_arch = "wasm32", no_main)]
+
+mod state;
+
 use async_graphql::{EmptyMutation, EmptySubscription, Object, Request, Response, Schema, SimpleObject};
+use battle_token::BattleTokenAbi;
 use linera_sdk::{
     abi::WithServiceAbi,
     linera_base_types::Amount,
     views::{RootView, View},
     Service, ServiceRuntime,
 };
-
-use crate::{BattleTokenAbi, BattleTokenState};
+use self::state::BattleTokenState;
 
 /// Token Service (GraphQL queries)
 pub struct BattleTokenService {

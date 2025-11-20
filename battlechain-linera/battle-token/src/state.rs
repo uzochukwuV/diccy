@@ -1,9 +1,8 @@
+use battle_token::TokenError;
 use linera_sdk::{
     linera_base_types::{AccountOwner, Amount, Timestamp},
     views::{MapView, RegisterView, RootView, ViewStorageContext},
 };
-
-use crate::TokenError;
 
 // Type alias for consistency
 type Owner = AccountOwner;

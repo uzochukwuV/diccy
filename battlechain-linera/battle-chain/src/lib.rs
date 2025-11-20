@@ -1,13 +1,3 @@
-// Module declarations
-mod state;
-mod contract;
-mod service;
-
-// Re-exports
-pub use state::{BattleState, BattleStatus};
-pub use contract::BattleContract;
-pub use service::BattleService;
-
 use battlechain_shared_types::{CharacterSnapshot, Owner, Stance};
 use linera_sdk::{
     abi::{ContractAbi, ServiceAbi},
