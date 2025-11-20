@@ -1,10 +1,10 @@
+use battle_token::BattleTokenAbi;
 use battlechain_shared_types::Owner;
 use linera_sdk::{
     linera_base_types::{Amount, ApplicationId, ChainId, Timestamp},
     views::{MapView, RegisterView, RootView, ViewStorageContext},
 };
-
-use crate::{BattleTokenAbi, PlayerChainError};
+use player_chain::PlayerChainError;
 
 /// Player Chain State - manages player inventory and stats
 #[derive(RootView)]

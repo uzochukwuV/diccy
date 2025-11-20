@@ -1,13 +1,3 @@
-// Module declarations
-mod state;
-mod contract;
-mod service;
-
-// Re-exports
-pub use state::BattleTokenState;
-pub use contract::BattleTokenContract;
-pub use service::BattleTokenService;
-
 use linera_sdk::{
     abi::{ContractAbi, ServiceAbi},
     linera_base_types::{AccountOwner, Amount, ChainId},

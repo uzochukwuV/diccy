@@ -1,3 +1,8 @@
+#![cfg_attr(target_arch = "wasm32", no_main)]
+
+mod state;
+
+use battle_token::{BattleTokenAbi, Operation as BattleTokenOperation, TokenResponse};
 use battlechain_shared_types::Owner;
 use linera_sdk::{
     abi::WithContractAbi,
@@ -5,11 +10,11 @@ use linera_sdk::{
     views::{RootView, View},
     Contract, ContractRuntime,
 };
-
-use crate::{
-    BattleTokenAbi, BattleTokenOperation, BetSide, Market, MarketStatus, Message, Operation,
-    PredictionAbi, PredictionError, PredictionState, TokenResponse,
+use prediction_chain::{
+    BetSide, Message, Operation,
+    PredictionAbi, PredictionError,
 };
+use self::state::{PredictionState, Market, MarketStatus};
 
 /// Prediction Market Contract
 pub struct PredictionContract {

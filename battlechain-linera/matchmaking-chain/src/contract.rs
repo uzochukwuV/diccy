@@ -1,15 +1,19 @@
+#![cfg_attr(target_arch = "wasm32", no_main)]
+
+mod state;
+
 use linera_sdk::{
     abi::WithContractAbi,
     linera_base_types::{Amount, ApplicationPermissions, ChainOwnership},
     views::{RootView, View},
     Contract, ContractRuntime,
 };
-use std::collections::BTreeMap;
-
-use crate::{
-    state::PendingBattle, MatchmakingAbi, MatchmakingState, Message, Operation,
-    PredictionOperation, QueueEntry,
+use matchmaking_chain::{
+    BattleMetadata, MatchmakingAbi, Message, Operation, QueueEntry,
 };
+use prediction_chain::Operation as PredictionOperation;
+use self::state::{MatchmakingState, PendingBattle};
+use std::collections::BTreeMap;
 
 /// Matchmaking Contract
 pub struct MatchmakingContract {

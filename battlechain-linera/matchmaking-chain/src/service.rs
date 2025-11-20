@@ -1,3 +1,7 @@
+#![cfg_attr(target_arch = "wasm32", no_main)]
+
+mod state;
+
 use async_graphql::{EmptyMutation, EmptySubscription, Request, Response, Schema, SimpleObject};
 use linera_sdk::{
     abi::WithServiceAbi,
@@ -5,8 +9,8 @@ use linera_sdk::{
     views::View,
     Service, ServiceRuntime,
 };
-
-use crate::{MatchmakingAbi, MatchmakingState};
+use matchmaking_chain::MatchmakingAbi;
+use self::state::MatchmakingState;
 
 /// Matchmaking Service
 pub struct MatchmakingService {

@@ -1,3 +1,7 @@
+#![cfg_attr(target_arch = "wasm32", no_main)]
+
+mod state;
+
 use async_graphql::{EmptyMutation, EmptySubscription, Request, Response, Schema, SimpleObject};
 use linera_sdk::{
     abi::WithServiceAbi,
@@ -5,8 +9,8 @@ use linera_sdk::{
     views::{RootView, View},
     Service, ServiceRuntime,
 };
-
-use crate::{PlayerChainAbi, PlayerChainState};
+use player_chain::PlayerChainAbi;
+use self::state::PlayerChainState;
 
 /// Player Chain Service
 pub struct PlayerChainService {

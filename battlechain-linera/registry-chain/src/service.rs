@@ -1,11 +1,15 @@
+#![cfg_attr(target_arch = "wasm32", no_main)]
+
+mod state;
+
 use async_graphql::{EmptyMutation, EmptySubscription, Request, Response, Schema, SimpleObject};
 use linera_sdk::{
     abi::WithServiceAbi,
     views::{RootView, View},
     Service, ServiceRuntime,
 };
-
-use crate::{RegistryAbi, RegistryState};
+use registry_chain::RegistryAbi;
+use self::state::RegistryState;
 
 /// Registry Service
 pub struct RegistryService {

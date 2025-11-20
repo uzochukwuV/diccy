@@ -1,11 +1,11 @@
+use battle_token::BattleTokenAbi;
 use battlechain_shared_types::Owner;
 use linera_sdk::{
     linera_base_types::{Amount, ApplicationId, ChainId, Timestamp},
     views::{MapView, RegisterView, RootView, ViewStorageContext},
 };
+use prediction_chain::{BetSide, PredictionError};
 use serde::{Deserialize, Serialize};
-
-use crate::{BattleTokenAbi, BetSide, PredictionError};
 
 /// Prediction market status
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

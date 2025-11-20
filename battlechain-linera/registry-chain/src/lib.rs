@@ -1,13 +1,3 @@
-// Module declarations
-mod state;
-mod contract;
-mod service;
-
-// Re-exports
-pub use state::{BattleRecord, CharacterStats, RegistryState};
-pub use contract::RegistryContract;
-pub use service::RegistryService;
-
 use battlechain_shared_events::CombatStats;
 use battlechain_shared_types::{CharacterClass, Owner};
 use linera_sdk::{

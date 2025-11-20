@@ -1,3 +1,7 @@
+#![cfg_attr(target_arch = "wasm32", no_main)]
+
+mod state;
+
 use battlechain_shared_types::{CharacterClass, Owner};
 use linera_sdk::{
     abi::WithContractAbi,
@@ -5,10 +9,10 @@ use linera_sdk::{
     views::{RootView, View},
     Contract, ContractRuntime,
 };
-
-use crate::{
-    CharacterStats, Message, Operation, RegistryAbi, RegistryError, RegistryState, BattleRecord,
+use registry_chain::{
+    Message, Operation, RegistryAbi, RegistryError,
 };
+use self::state::{RegistryState, CharacterStats, BattleRecord};
 
 /// Registry Contract
 pub struct RegistryContract {

@@ -1,11 +1,15 @@
+#![cfg_attr(target_arch = "wasm32", no_main)]
+
+mod state;
+
+use self::state::BattleTokenState;
+use battle_token::{BattleTokenAbi, Message, Operation, TokenResponse};
 use linera_sdk::{
     abi::WithContractAbi,
     linera_base_types::{AccountOwner, Amount},
     views::{RootView, View},
     Contract, ContractRuntime,
 };
-
-use crate::{BattleTokenAbi, BattleTokenState, Message, Operation, TokenResponse};
 
 // Type alias for consistency
 type Owner = AccountOwner;

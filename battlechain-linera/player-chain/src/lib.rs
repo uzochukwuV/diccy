@@ -1,13 +1,3 @@
-// Module declarations
-mod state;
-mod contract;
-mod service;
-
-// Re-exports
-pub use state::PlayerChainState;
-pub use contract::PlayerChainContract;
-pub use service::PlayerChainService;
-
 use battlechain_shared_types::{CharacterClass, Owner};
 use linera_sdk::{
     abi::{ContractAbi, ServiceAbi},

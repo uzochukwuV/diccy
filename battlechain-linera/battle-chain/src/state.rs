@@ -1,3 +1,5 @@
+use battle_chain::{BattleError, BattleParticipant, CombatAction, RoundResult, TurnSubmission};
+use battle_token::BattleTokenAbi;
 use battlechain_shared_types::{
     derive_random_u64, mul_fp, random_in_range,
     FP_SCALE, MAX_COMBO_STACK, Owner, Stance,
@@ -7,8 +9,6 @@ use linera_sdk::{
     views::{RegisterView, RootView, ViewStorageContext},
 };
 use serde::{Deserialize, Serialize};
-
-use crate::{BattleError, BattleParticipant, BattleTokenAbi, CombatAction, RoundResult, TurnSubmission};
 
 /// Battle chain state
 #[derive(RootView)]

@@ -1,3 +1,7 @@
+#![cfg_attr(target_arch = "wasm32", no_main)]
+
+mod state;
+
 use battlechain_shared_types::{CharacterClass, CharacterNFT};
 use linera_sdk::{
     abi::WithContractAbi,
@@ -5,8 +9,9 @@ use linera_sdk::{
     views::{RootView, View},
     Contract, ContractRuntime,
 };
-
-use crate::{BattleTokenAbi, Message, Operation, PlayerChainAbi, PlayerChainError, PlayerChainState};
+use battle_token::BattleTokenAbi;
+use player_chain::{Message, Operation, PlayerChainAbi, PlayerChainError};
+use self::state::PlayerChainState;
 
 /// Player Chain Contract
 pub struct PlayerChainContract {
