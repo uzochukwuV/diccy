@@ -16,6 +16,9 @@ use linera_sdk::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+// Import battle-token ABI for typed ApplicationId
+use battle_token::BattleTokenAbi;
+
 /// Player Chain Application ABI
 pub struct PlayerChainAbi;
 
@@ -33,7 +36,7 @@ impl ServiceAbi for PlayerChainAbi {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Operation {
     /// Initialize BATTLE token app reference
-    Initialize { battle_token_app: ApplicationId },
+    Initialize { battle_token_app: ApplicationId<BattleTokenAbi> },
 
     /// Create new character
     CreateCharacter { nft_id: String, class: CharacterClass },

@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 async-graphql = "=7.0.17"
 battlechain-shared-types = { path = "../shared-types" }
+prediction-chain = { path = "../prediction-chain" }
 linera-sdk = { git = "https://github.com/linera-io/linera-protocol.git", tag = "v0.15.5", features = ["wasmer"] }
 linera-views = { git = "https://github.com/linera-io/linera-protocol.git", tag = "v0.15.5" }
 log = "0.4"
@@ -15,3 +16,11 @@ thiserror = "1.0"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "matchmaking-chain_contract"
+path = "src/bin/contract.rs"
+
+[[bin]]
+name = "matchmaking-chain_service"
+path = "src/bin/service.rs"

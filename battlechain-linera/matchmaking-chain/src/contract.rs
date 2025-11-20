@@ -82,9 +82,9 @@ impl MatchmakingContract {
             };
 
             // Call prediction chain synchronously to create market
-            let result = self.runtime.call_application(
+            let result: Result<(), prediction_chain::PredictionError> = self.runtime.call_application(
                 true,  // authenticated call
-                prediction_app.clone(),
+                *prediction_app,
                 &create_market_op,
             );
 
@@ -94,7 +94,7 @@ impl MatchmakingContract {
                     battle_chain_id
                 ),
                 Err(e) => log::warn!(
-                    "Failed to create prediction market for battle {:?}: {}",
+                    "Failed to create prediction market for battle {:?}: {:?}",
                     battle_chain_id, e
                 ),
             }

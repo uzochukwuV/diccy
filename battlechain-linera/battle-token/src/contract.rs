@@ -5,7 +5,7 @@ use linera_sdk::{
     Contract, ContractRuntime,
 };
 
-use crate::{BattleTokenAbi, BattleTokenState, Message, Operation};
+use crate::{BattleTokenAbi, BattleTokenState, Message, Operation, TokenResponse};
 
 // Type alias for consistency
 type Owner = AccountOwner;
@@ -77,10 +77,25 @@ impl Contract for BattleTokenContract {
         let now = self.runtime.system_time();
 
         match operation {
+            // Query operations (no authentication needed for reads)
+            Operation::Balance { owner } => {
+                let balance = self.state.balance_of(&owner).await;
+                log::info!("Balance query for {:?}: {}", owner, balance);
+                TokenResponse::Balance(balance)
+            }
+
+            Operation::GetAllowance { owner, spender } => {
+                let allowance = self.state.allowance(&owner, &spender).await;
+                log::info!("Allowance query - owner: {:?}, spender: {:?}, allowance: {}", owner, spender, allowance);
+                TokenResponse::Allowance(allowance)
+            }
+
+            // Write operations (require authentication)
             Operation::Transfer { to, amount } => {
                 match self.state.transfer(caller, to, amount, now).await {
                     Ok(_) => {
                         log::info!("Transfer successful: {:?} -> {:?}, amount: {}", caller, to, amount);
+                        TokenResponse::TransferSuccess
                     }
                     Err(e) => {
                         log::error!("Transfer failed: {:?} -> {:?}, amount: {}, error: {:?}", caller, to, amount, e);
@@ -93,6 +108,7 @@ impl Contract for BattleTokenContract {
                 match self.state.approve(caller, spender, amount).await {
                     Ok(_) => {
                         log::info!("Approval successful: owner {:?} approved {:?} to spend {}", caller, spender, amount);
+                        TokenResponse::Ok
                     }
                     Err(e) => {
                         log::error!("Approval failed: owner {:?}, spender {:?}, amount: {}, error: {:?}", caller, spender, amount, e);
@@ -105,6 +121,7 @@ impl Contract for BattleTokenContract {
                 match self.state.transfer_from(caller, from, to, amount, now).await {
                     Ok(_) => {
                         log::info!("TransferFrom successful: spender {:?} transferred {} from {:?} to {:?}", caller, amount, from, to);
+                        TokenResponse::TransferSuccess
                     }
                     Err(e) => {
                         log::error!("TransferFrom failed: spender {:?}, from {:?}, to {:?}, amount: {}, error: {:?}", caller, from, to, amount, e);
@@ -117,6 +134,7 @@ impl Contract for BattleTokenContract {
                 match self.state.burn(caller, amount, now).await {
                     Ok(_) => {
                         log::info!("Burn successful: {:?} burned {}", caller, amount);
+                        TokenResponse::Ok
                     }
                     Err(e) => {
                         log::error!("Burn failed: {:?}, amount: {}, error: {:?}", caller, amount, e);
@@ -136,6 +154,7 @@ impl Contract for BattleTokenContract {
                 match self.state.mint(to, amount, now).await {
                     Ok(_) => {
                         log::info!("Mint successful: admin {:?} minted {} to {:?}", caller, amount, to);
+                        TokenResponse::Ok
                     }
                     Err(e) => {
                         log::error!("Mint failed: admin {:?}, to {:?}, amount: {}, error: {:?}", caller, to, amount, e);
@@ -156,6 +175,7 @@ impl Contract for BattleTokenContract {
                 match self.state.mint(caller, amount, now).await {
                     Ok(_) => {
                         log::info!("Claim successful: admin {:?} claimed {}", caller, amount);
+                        TokenResponse::Ok
                     }
                     Err(e) => {
                         log::error!("Claim failed: {:?}, amount: {}, error: {:?}", caller, amount, e);

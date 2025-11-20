@@ -8,7 +8,7 @@ use linera_sdk::{
 
 use crate::{
     BattleChainAbi, BattleError, BattleParticipant, BattleParameters, BattleState, BattleStatus,
-    BattleTokenAbi, BattleTokenOperation, Message, Operation,
+    BattleTokenAbi, BattleTokenOperation, Message, Operation, TokenResponse,
 };
 
 /// Battle Contract
@@ -327,38 +327,48 @@ impl Contract for BattleContract {
                 ) {
                     // Transfer platform fee to treasury
                     if platform_fee > Amount::ZERO {
-                        self.runtime.call_application::<BattleTokenAbi>(
+                        let response: TokenResponse = self.runtime.call_application(
                             true, // authenticated call
-                            battle_token_app.with_abi(),
+                            *battle_token_app,
                             &BattleTokenOperation::Transfer {
                                 to: *treasury_owner,
                                 amount: platform_fee,
                             },
                         );
 
-                        log::info!(
-                            "Transferred platform fee {} to treasury {:?}",
-                            platform_fee,
-                            treasury_owner
-                        );
+                        match response {
+                            TokenResponse::TransferSuccess => {
+                                log::info!(
+                                    "Transferred platform fee {} to treasury {:?}",
+                                    platform_fee,
+                                    treasury_owner
+                                );
+                            }
+                            response => panic!("Platform fee transfer failed with response: {:?}", response),
+                        }
                     }
 
                     // Transfer winner payout to winner
                     if winner_payout > Amount::ZERO {
-                        self.runtime.call_application::<BattleTokenAbi>(
+                        let response: TokenResponse = self.runtime.call_application(
                             true, // authenticated call
-                            battle_token_app.with_abi(),
+                            *battle_token_app,
                             &BattleTokenOperation::Transfer {
                                 to: winner_owner,
                                 amount: winner_payout,
                             },
                         );
 
-                        log::info!(
-                            "Transferred winner payout {} to {:?}",
-                            winner_payout,
-                            winner_owner
-                        );
+                        match response {
+                            TokenResponse::TransferSuccess => {
+                                log::info!(
+                                    "Transferred winner payout {} to {:?}",
+                                    winner_payout,
+                                    winner_owner
+                                );
+                            }
+                            response => panic!("Winner payout transfer failed with response: {:?}", response),
+                        }
                     }
                 }
 

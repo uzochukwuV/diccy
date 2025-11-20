@@ -14,3 +14,11 @@ thiserror = "1.0"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "battle-token_contract"
+path = "src/bin/contract.rs"
+
+[[bin]]
+name = "battle-token_service"
+path = "src/bin/service.rs"

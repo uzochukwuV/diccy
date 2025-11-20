@@ -6,7 +6,7 @@ use linera_sdk::{
     Contract, ContractRuntime,
 };
 
-use crate::{Message, Operation, PlayerChainAbi, PlayerChainError, PlayerChainState};
+use crate::{BattleTokenAbi, Message, Operation, PlayerChainAbi, PlayerChainError, PlayerChainState};
 
 /// Player Chain Contract
 pub struct PlayerChainContract {
@@ -22,7 +22,7 @@ impl WithContractAbi for PlayerChainContract {
 
 impl Contract for PlayerChainContract {
     type Message = Message;
-    type Parameters = Option<ApplicationId>;
+    type Parameters = Option<ApplicationId<BattleTokenAbi>>;
     type InstantiationArgument = ();
     type EventValue = ();
 
