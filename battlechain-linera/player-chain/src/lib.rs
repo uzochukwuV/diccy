@@ -245,7 +245,7 @@ impl Contract for PlayerChainContract {
     async fn instantiate(&mut self, _argument: ()) {
         let battle_token_app = self.runtime.application_parameters();
         let chain_ownership = self.runtime.chain_ownership();
-        let owner = chain_ownership
+        let _owner = chain_ownership
             .super_owners
             .iter()
             .next()

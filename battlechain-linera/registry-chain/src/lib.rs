@@ -1,5 +1,5 @@
 use async_graphql::{Request, Response, Schema, EmptyMutation, EmptySubscription, SimpleObject};
-use battlechain_shared_events::{BattleEvent, CombatStats};
+use battlechain_shared_events::CombatStats;
 use battlechain_shared_types::{CharacterClass, Owner};
 use linera_sdk::{
     abi::{ContractAbi, ServiceAbi, WithContractAbi, WithServiceAbi},
