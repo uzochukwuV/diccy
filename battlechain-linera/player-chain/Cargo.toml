@@ -16,3 +16,11 @@ thiserror = "1.0"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "player-chain_contract"
+path = "src/bin/contract.rs"
+
+[[bin]]
+name = "player-chain_service"
+path = "src/bin/service.rs"

@@ -17,6 +17,14 @@ thiserror = "1.0"
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[[bin]]
+name = "prediction-chain_contract"
+path = "src/bin/contract.rs"
+
+[[bin]]
+name = "prediction-chain_service"
+path = "src/bin/service.rs"
+
 [dev-dependencies]
 
 [[bin]]
