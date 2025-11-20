@@ -1,3 +1,8 @@
+#![cfg_attr(target_arch = "wasm32", no_main)]
+
+mod state;
+
+use battle_token::{BattleTokenAbi, Operation as BattleTokenOperation, TokenResponse};
 use battlechain_shared_types::Owner;
 use linera_sdk::{
     abi::WithContractAbi,
@@ -5,11 +10,11 @@ use linera_sdk::{
     views::{RootView, View},
     Contract, ContractRuntime,
 };
-
-use crate::{
-    BattleTokenAbi, BattleTokenOperation, BetSide, Market, MarketStatus, Message, Operation,
-    PredictionAbi, PredictionError, PredictionState,
+use prediction_chain::{
+    BetSide, Message, Operation,
+    PredictionAbi, PredictionError,
 };
+use self::state::{PredictionState, Market, MarketStatus};
 
 /// Prediction Market Contract
 pub struct PredictionContract {
@@ -262,16 +267,26 @@ impl Contract for PredictionContract {
                         amount: winnings,
                     };
 
-                    self.runtime.call_application(
+                    let response: TokenResponse = self.runtime.call_application(
                         true,  // authenticated call
-                        battle_token_app.clone(),
+                        *battle_token_app,
                         &transfer_op,
                     );
 
-                    log::info!(
-                        "Transferred {} BATTLE tokens to bettor {:?} for market {}",
-                        winnings, bet.bettor, market_id
-                    );
+                    match response {
+                        TokenResponse::TransferSuccess => {
+                            log::info!(
+                                "Transferred {} BATTLE tokens to bettor {:?} for market {}",
+                                winnings, bet.bettor, market_id
+                            );
+                        }
+                        response => {
+                            log::error!("Winnings transfer failed with response: {:?}", response);
+                            return Err(PredictionError::InvalidConfiguration(
+                                format!("Token transfer failed: {:?}", response)
+                            ));
+                        }
+                    }
                 } else {
                     log::warn!("Battle token app not configured - cannot transfer winnings");
                     return Err(PredictionError::InvalidConfiguration("Battle token app not set".to_string()));

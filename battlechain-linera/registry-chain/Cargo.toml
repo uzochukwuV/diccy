@@ -13,15 +13,10 @@ log = "0.4"
 serde = { version = "1.0", features = ["derive"] }
 thiserror = "1.0"
 
-[lib]
-crate-type = ["cdylib", "rlib"]
-
-[dev-dependencies]
-
 [[bin]]
-name = "registry_contract"
+name = "registry_chain_contract"
 path = "src/contract.rs"
 
 [[bin]]
-name = "registry_service"
+name = "registry_chain_service"
 path = "src/service.rs"

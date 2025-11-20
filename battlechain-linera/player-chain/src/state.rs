@@ -1,10 +1,10 @@
+use battle_token::BattleTokenAbi;
 use battlechain_shared_types::Owner;
 use linera_sdk::{
-    linera_base_types::{Amount, ChainId, Timestamp},
+    linera_base_types::{Amount, ApplicationId, ChainId, Timestamp},
     views::{MapView, RegisterView, RootView, ViewStorageContext},
 };
-
-use crate::PlayerChainError;
+use player_chain::PlayerChainError;
 
 /// Player Chain State - manages player inventory and stats
 #[derive(RootView)]
@@ -14,7 +14,7 @@ pub struct PlayerChainState {
     pub characters: RegisterView<Vec<battlechain_shared_types::CharacterNFT>>,
 
     /// BATTLE token application reference
-    pub battle_token_app: RegisterView<Option<linera_sdk::linera_base_types::ApplicationId>>,
+    pub battle_token_app: RegisterView<Option<ApplicationId<BattleTokenAbi>>>,
 
     /// Cached BATTLE balance
     pub battle_balance: RegisterView<Amount>,

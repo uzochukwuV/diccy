@@ -1,15 +1,21 @@
+#![cfg_attr(target_arch = "wasm32", no_main)]
+
+mod state;
+
+use battle_chain::{
+    BattleChainAbi, BattleError, BattleParticipant, BattleParameters,
+    Message, Operation, RoundResult, TurnSubmission,
+};
+use battle_token::{BattleTokenAbi, Operation as BattleTokenOperation, TokenResponse};
 use battlechain_shared_events::{BattleEvent, CombatStats};
+use battlechain_shared_types::Owner;
 use linera_sdk::{
     abi::WithContractAbi,
     linera_base_types::{Amount, Timestamp},
     views::{RootView, View},
     Contract, ContractRuntime,
 };
-
-use crate::{
-    BattleChainAbi, BattleError, BattleParticipant, BattleParameters, BattleState, BattleStatus,
-    BattleTokenAbi, BattleTokenOperation, Message, Operation,
-};
+use self::state::{BattleState, BattleStatus};
 
 /// Battle Contract
 pub struct BattleContract {
@@ -25,8 +31,8 @@ impl WithContractAbi for BattleContract {
 
 /// Calculate combat statistics for a player from round results
 fn calculate_combat_stats(
-    round_results: &[crate::RoundResult],
-    player_owner: &crate::Owner,
+    round_results: &[RoundResult],
+    player_owner: &Owner,
 ) -> (u64, u64, u64, u64, u64) {
     let mut damage_dealt = 0u64;
     let mut damage_taken = 0u64;
@@ -184,7 +190,7 @@ impl Contract for BattleContract {
                 if let Some(ref mut participant) = p1 {
                     if participant.owner == caller {
                         if participant.current_hp > 0 && participant.turns_submitted[turn as usize].is_none() {
-                            participant.turns_submitted[turn as usize] = Some(crate::TurnSubmission {
+                            participant.turns_submitted[turn as usize] = Some(TurnSubmission {
                                 round,
                                 turn,
                                 stance,
@@ -199,7 +205,7 @@ impl Contract for BattleContract {
                 if let Some(ref mut participant) = p2 {
                     if participant.owner == caller {
                         if participant.current_hp > 0 && participant.turns_submitted[turn as usize].is_none() {
-                            participant.turns_submitted[turn as usize] = Some(crate::TurnSubmission {
+                            participant.turns_submitted[turn as usize] = Some(TurnSubmission {
                                 round,
                                 turn,
                                 stance,
@@ -327,38 +333,48 @@ impl Contract for BattleContract {
                 ) {
                     // Transfer platform fee to treasury
                     if platform_fee > Amount::ZERO {
-                        self.runtime.call_application::<BattleTokenAbi>(
+                        let response: TokenResponse = self.runtime.call_application(
                             true, // authenticated call
-                            battle_token_app.with_abi(),
+                            *battle_token_app,
                             &BattleTokenOperation::Transfer {
                                 to: *treasury_owner,
                                 amount: platform_fee,
                             },
                         );
 
-                        log::info!(
-                            "Transferred platform fee {} to treasury {:?}",
-                            platform_fee,
-                            treasury_owner
-                        );
+                        match response {
+                            TokenResponse::TransferSuccess => {
+                                log::info!(
+                                    "Transferred platform fee {} to treasury {:?}",
+                                    platform_fee,
+                                    treasury_owner
+                                );
+                            }
+                            response => panic!("Platform fee transfer failed with response: {:?}", response),
+                        }
                     }
 
                     // Transfer winner payout to winner
                     if winner_payout > Amount::ZERO {
-                        self.runtime.call_application::<BattleTokenAbi>(
+                        let response: TokenResponse = self.runtime.call_application(
                             true, // authenticated call
-                            battle_token_app.with_abi(),
+                            *battle_token_app,
                             &BattleTokenOperation::Transfer {
                                 to: winner_owner,
                                 amount: winner_payout,
                             },
                         );
 
-                        log::info!(
-                            "Transferred winner payout {} to {:?}",
-                            winner_payout,
-                            winner_owner
-                        );
+                        match response {
+                            TokenResponse::TransferSuccess => {
+                                log::info!(
+                                    "Transferred winner payout {} to {:?}",
+                                    winner_payout,
+                                    winner_owner
+                                );
+                            }
+                            response => panic!("Winner payout transfer failed with response: {:?}", response),
+                        }
                     }
                 }
 

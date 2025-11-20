@@ -1,11 +1,15 @@
+#![cfg_attr(target_arch = "wasm32", no_main)]
+
+mod state;
+
 use async_graphql::{EmptyMutation, EmptySubscription, Request, Response, Schema, SimpleObject};
+use battle_chain::BattleChainAbi;
 use linera_sdk::{
     abi::WithServiceAbi,
     views::{RootView, View},
     Service, ServiceRuntime,
 };
-
-use crate::{BattleChainAbi, BattleState, BattleStatus};
+use self::state::{BattleState, BattleStatus};
 
 /// Battle Service
 pub struct BattleService {

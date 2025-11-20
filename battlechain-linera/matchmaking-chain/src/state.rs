@@ -3,9 +3,9 @@ use linera_sdk::{
     linera_base_types::{Amount, ApplicationId, ChainId, Timestamp},
     views::{MapView, RegisterView, RootView, ViewStorageContext},
 };
+use matchmaking_chain::{BattleMetadata, MatchmakingError, QueueEntry};
+use prediction_chain::PredictionAbi;
 use serde::{Deserialize, Serialize};
-
-use crate::{BattleMetadata, MatchmakingError, PredictionAbi, QueueEntry};
 
 /// Matchmaking State - coordinates battle matchmaking
 #[derive(RootView)]

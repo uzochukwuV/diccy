@@ -1,13 +1,3 @@
-// Module declarations
-mod state;
-mod contract;
-mod service;
-
-// Re-exports
-pub use state::BattleTokenState;
-pub use contract::BattleTokenContract;
-pub use service::BattleTokenService;
-
 use linera_sdk::{
     abi::{ContractAbi, ServiceAbi},
     linera_base_types::{AccountOwner, Amount, ChainId},
@@ -23,7 +13,7 @@ pub struct BattleTokenAbi;
 
 impl ContractAbi for BattleTokenAbi {
     type Operation = Operation;
-    type Response = ();
+    type Response = TokenResponse;
 }
 
 impl ServiceAbi for BattleTokenAbi {
@@ -31,9 +21,28 @@ impl ServiceAbi for BattleTokenAbi {
     type QueryResponse = async_graphql::Response;
 }
 
+/// Token Response enum for inter-contract call returns
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum TokenResponse {
+    /// Operation completed successfully
+    Ok,
+    /// Balance query response
+    Balance(Amount),
+    /// Transfer completed successfully
+    TransferSuccess,
+    /// Allowance query response
+    Allowance(Amount),
+}
+
 /// Token Operations
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Operation {
+    /// Query balance of an account (for inter-contract calls)
+    Balance { owner: Owner },
+
+    /// Query allowance between owner and spender
+    GetAllowance { owner: Owner, spender: Owner },
+
     /// Transfer tokens to another account
     Transfer { to: Owner, amount: Amount },
 

@@ -1,13 +1,3 @@
-// Module declarations
-mod state;
-mod contract;
-mod service;
-
-// Re-exports
-pub use state::PlayerChainState;
-pub use contract::PlayerChainContract;
-pub use service::PlayerChainService;
-
 use battlechain_shared_types::{CharacterClass, Owner};
 use linera_sdk::{
     abi::{ContractAbi, ServiceAbi},
@@ -15,6 +5,9 @@ use linera_sdk::{
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
+// Import battle-token ABI for typed ApplicationId
+use battle_token::BattleTokenAbi;
 
 /// Player Chain Application ABI
 pub struct PlayerChainAbi;
@@ -33,7 +26,7 @@ impl ServiceAbi for PlayerChainAbi {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Operation {
     /// Initialize BATTLE token app reference
-    Initialize { battle_token_app: ApplicationId },
+    Initialize { battle_token_app: ApplicationId<BattleTokenAbi> },
 
     /// Create new character
     CreateCharacter { nft_id: String, class: CharacterClass },

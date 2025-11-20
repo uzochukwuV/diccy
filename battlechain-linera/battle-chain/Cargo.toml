@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 async-graphql = "=7.0.17"
+battle-token = { path = "../battle-token" }
 battlechain-shared-events = { path = "../shared-events" }
 battlechain-shared-types = { path = "../shared-types" }
 linera-sdk = { git = "https://github.com/linera-io/linera-protocol.git", tag = "v0.15.5", features = ["wasmer"] }
@@ -14,7 +15,6 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "1.0"
 
-
 [[bin]]
 name = "battle_chain_contract"
 path = "src/contract.rs"
@@ -23,5 +23,3 @@ path = "src/contract.rs"
 name = "battle_chain_service"
 path = "src/service.rs"
 
-[lib]
-crate-type = ["cdylib", "rlib"]

@@ -1,15 +1,19 @@
+#![cfg_attr(target_arch = "wasm32", no_main)]
+
+mod state;
+
 use linera_sdk::{
     abi::WithContractAbi,
     linera_base_types::{Amount, ApplicationPermissions, ChainOwnership},
     views::{RootView, View},
     Contract, ContractRuntime,
 };
-use std::collections::BTreeMap;
-
-use crate::{
-    state::PendingBattle, MatchmakingAbi, MatchmakingState, Message, Operation,
-    PredictionOperation, QueueEntry,
+use matchmaking_chain::{
+    BattleMetadata, MatchmakingAbi, Message, Operation, QueueEntry,
 };
+use prediction_chain::Operation as PredictionOperation;
+use self::state::{MatchmakingState, PendingBattle};
+use std::collections::BTreeMap;
 
 /// Matchmaking Contract
 pub struct MatchmakingContract {
@@ -82,9 +86,9 @@ impl MatchmakingContract {
             };
 
             // Call prediction chain synchronously to create market
-            let result = self.runtime.call_application(
+            let result: Result<(), prediction_chain::PredictionError> = self.runtime.call_application(
                 true,  // authenticated call
-                prediction_app.clone(),
+                *prediction_app,
                 &create_market_op,
             );
 
@@ -94,7 +98,7 @@ impl MatchmakingContract {
                     battle_chain_id
                 ),
                 Err(e) => log::warn!(
-                    "Failed to create prediction market for battle {:?}: {}",
+                    "Failed to create prediction market for battle {:?}: {:?}",
                     battle_chain_id, e
                 ),
             }

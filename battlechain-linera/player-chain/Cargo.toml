@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 async-graphql = "=7.0.17"
+battle-token = { path = "../battle-token" }
 battlechain-shared-types = { path = "../shared-types" }
 linera-sdk = { git = "https://github.com/linera-io/linera-protocol.git", tag = "v0.15.5", features = ["wasmer"] }
 linera-views = { git = "https://github.com/linera-io/linera-protocol.git", tag = "v0.15.5" }
@@ -14,12 +15,11 @@ serde_json = "1.0"
 thiserror = "1.0"
 
 [[bin]]
-name = "esport_contract"
+name = "player_chain_contract"
 path = "src/contract.rs"
 
 [[bin]]
-name = "esport_service"
+name = "player_chain_service"
 path = "src/service.rs"
 
-[lib]
-crate-type = ["cdylib", "rlib"]
+
