@@ -2,7 +2,7 @@ use async_graphql::{Request, Response, Schema, EmptyMutation, EmptySubscription,
 use battlechain_shared_types::Owner;
 use linera_sdk::{
     abi::{ContractAbi, ServiceAbi, WithContractAbi, WithServiceAbi},
-    linera_base_types::{Amount, ChainId, Timestamp},
+    linera_base_types::{AccountOwner, Amount, ApplicationId, ChainId, Timestamp},
     views::{MapView, RegisterView, RootView, View, ViewStorageContext},
     Contract, Service, ContractRuntime, ServiceRuntime,
 };
@@ -22,6 +22,26 @@ impl ContractAbi for PredictionAbi {
 impl ServiceAbi for PredictionAbi {
     type Query = Request;
     type QueryResponse = Response;
+}
+
+// Battle Token types (defined locally to avoid circular dependencies)
+/// Battle Token Application ABI
+pub struct BattleTokenAbi;
+
+impl ContractAbi for BattleTokenAbi {
+    type Operation = BattleTokenOperation;
+    type Response = ();
+}
+
+impl ServiceAbi for BattleTokenAbi {
+    type Query = Request;
+    type QueryResponse = Response;
+}
+
+/// Battle Token Operations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum BattleTokenOperation {
+    Transfer { to: AccountOwner, amount: Amount },
 }
 
 /// Prediction market status
@@ -170,6 +190,9 @@ pub struct PredictionState {
     /// Treasury owner for platform fees
     pub treasury_owner: RegisterView<Option<Owner>>,
 
+    /// Battle token application ID (for transferring winnings)
+    pub battle_token_app: RegisterView<Option<ApplicationId<BattleTokenAbi>>>,
+
     /// SECURITY: Track known battle chains (for message authentication)
     pub known_battle_chains: MapView<ChainId, bool>,
 
@@ -307,6 +330,9 @@ pub enum PredictionError {
     #[error("Not authorized: only admin can perform this operation")]
     NotAuthorized,
 
+    #[error("Invalid configuration: {0}")]
+    InvalidConfiguration(String),
+
     #[error("View error: {0}")]
     ViewError(String),
 }
@@ -353,6 +379,7 @@ impl Contract for PredictionContract {
         self.state.total_volume.set(Amount::ZERO);
         self.state.platform_fee_bps.set(platform_fee_bps);
         self.state.treasury_owner.set(Some(treasury_owner.clone()));
+        self.state.battle_token_app.set(None);
         self.state.created_at.set(now);
 
         // SECURITY: Initialize admin as treasury owner
@@ -559,7 +586,30 @@ impl Contract for PredictionContract {
                     return Err(PredictionError::NoWinnings.into());
                 }
 
-                // Send winnings payout message
+                // Transfer winnings to bettor via battle token application
+                if let Some(battle_token_app) = self.state.battle_token_app.get().as_ref() {
+                    let bettor_owner = AccountOwner::from(bet.bettor);
+                    let transfer_op = BattleTokenOperation::Transfer {
+                        to: bettor_owner,
+                        amount: winnings,
+                    };
+
+                    self.runtime.call_application(
+                        true,  // authenticated call
+                        battle_token_app.clone(),
+                        &transfer_op,
+                    );
+
+                    log::info!(
+                        "Transferred {} BATTLE tokens to bettor {:?} for market {}",
+                        winnings, bet.bettor, market_id
+                    );
+                } else {
+                    log::warn!("Battle token app not configured - cannot transfer winnings");
+                    return Err(PredictionError::InvalidConfiguration("Battle token app not set".to_string()));
+                }
+
+                // Send winnings payout message for notification
                 self.runtime
                     .prepare_message(Message::WinningsPayout {
                         market_id,
