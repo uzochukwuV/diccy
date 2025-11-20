@@ -16,6 +16,9 @@ use linera_sdk::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+// Import prediction-chain ABI and operations for inter-contract calls
+use prediction_chain::{PredictionAbi, Operation as PredictionOperation};
+
 // Battle chain message types (defined inline to avoid circular dependencies)
 /// Battle participant state for initialization
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,30 +55,6 @@ impl BattleParticipant {
             turns_submitted: [None, None, None],
         }
     }
-}
-
-// Prediction chain types (defined inline to avoid circular dependencies)
-/// Prediction Market Chain Application ABI
-pub struct PredictionAbi;
-
-impl ContractAbi for PredictionAbi {
-    type Operation = PredictionOperation;
-    type Response = Result<(), String>; // Simplified error type
-}
-
-impl ServiceAbi for PredictionAbi {
-    type Query = async_graphql::Request;
-    type QueryResponse = async_graphql::Response;
-}
-
-/// Operations to call on prediction chain
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum PredictionOperation {
-    CreateMarket {
-        battle_chain: ChainId,
-        player1_chain: ChainId,
-        player2_chain: ChainId,
-    },
 }
 
 /// Matchmaking Chain Application ABI

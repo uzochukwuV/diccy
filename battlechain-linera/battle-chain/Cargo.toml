@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 async-graphql = "=7.0.17"
+battle-token = { path = "../battle-token" }
 battlechain-shared-events = { path = "../shared-events" }
 battlechain-shared-types = { path = "../shared-types" }
 linera-sdk = { git = "https://github.com/linera-io/linera-protocol.git", tag = "v0.15.5", features = ["wasmer"] }

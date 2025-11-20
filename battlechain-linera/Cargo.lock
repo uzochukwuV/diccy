@@ -310,6 +310,7 @@ name = "battle-chain"
 version = "0.1.0"
 dependencies = [
  "async-graphql",
+ "battle-token",
  "battlechain-shared-events",
  "battlechain-shared-types",
  "linera-sdk",
@@ -2510,6 +2511,7 @@ dependencies = [
  "linera-sdk",
  "linera-views",
  "log",
+ "prediction-chain",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
@@ -2858,6 +2860,7 @@ name = "player-chain"
 version = "0.1.0"
 dependencies = [
  "async-graphql",
+ "battle-token",
  "battlechain-shared-types",
  "linera-sdk",
  "linera-views",
@@ -2905,6 +2908,7 @@ name = "prediction-chain"
 version = "0.1.0"
 dependencies = [
  "async-graphql",
+ "battle-token",
  "battlechain-shared-events",
  "battlechain-shared-types",
  "linera-sdk",

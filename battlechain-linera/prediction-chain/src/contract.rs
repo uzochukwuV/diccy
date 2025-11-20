@@ -8,7 +8,7 @@ use linera_sdk::{
 
 use crate::{
     BattleTokenAbi, BattleTokenOperation, BetSide, Market, MarketStatus, Message, Operation,
-    PredictionAbi, PredictionError, PredictionState,
+    PredictionAbi, PredictionError, PredictionState, TokenResponse,
 };
 
 /// Prediction Market Contract
@@ -262,16 +262,26 @@ impl Contract for PredictionContract {
                         amount: winnings,
                     };
 
-                    self.runtime.call_application(
+                    let response: TokenResponse = self.runtime.call_application(
                         true,  // authenticated call
-                        battle_token_app.clone(),
+                        *battle_token_app,
                         &transfer_op,
                     );
 
-                    log::info!(
-                        "Transferred {} BATTLE tokens to bettor {:?} for market {}",
-                        winnings, bet.bettor, market_id
-                    );
+                    match response {
+                        TokenResponse::TransferSuccess => {
+                            log::info!(
+                                "Transferred {} BATTLE tokens to bettor {:?} for market {}",
+                                winnings, bet.bettor, market_id
+                            );
+                        }
+                        response => {
+                            log::error!("Winnings transfer failed with response: {:?}", response);
+                            return Err(PredictionError::InvalidConfiguration(
+                                format!("Token transfer failed: {:?}", response)
+                            ));
+                        }
+                    }
                 } else {
                     log::warn!("Battle token app not configured - cannot transfer winnings");
                     return Err(PredictionError::InvalidConfiguration("Battle token app not set".to_string()));

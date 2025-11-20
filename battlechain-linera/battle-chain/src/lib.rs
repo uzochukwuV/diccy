@@ -16,20 +16,8 @@ use linera_sdk::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-// Battle Token ABI for cross-application calls
-// Defined inline to avoid circular dependencies (battle-token is cdylib)
-pub struct BattleTokenAbi;
-
-impl ContractAbi for BattleTokenAbi {
-    type Operation = BattleTokenOperation;
-    type Response = ();
-}
-
-/// Battle token operations (subset needed for calls)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum BattleTokenOperation {
-    Transfer { to: Owner, amount: Amount },
-}
+// Import battle-token ABI and types for inter-contract calls
+use battle_token::{BattleTokenAbi, Operation as BattleTokenOperation, TokenResponse};
 
 /// Battle Chain Application ABI
 pub struct BattleChainAbi;
@@ -184,7 +172,7 @@ pub enum Message {
         player1: BattleParticipant,
         player2: BattleParticipant,
         matchmaking_chain: ChainId,
-        battle_token_app: ApplicationId,
+        battle_token_app: ApplicationId<BattleTokenAbi>,
         prediction_chain_id: Option<ChainId>,
         platform_fee_bps: u16,
         treasury_owner: Owner,
@@ -227,7 +215,7 @@ pub struct BattleParameters {
     pub player2_chain: ChainId,
     pub player2_character: CharacterSnapshot,
     pub player2_stake: Amount,
-    pub battle_token_app: ApplicationId,
+    pub battle_token_app: ApplicationId<BattleTokenAbi>,
     pub matchmaking_chain: ChainId,
     pub platform_fee_bps: u16,
     pub treasury_owner: Owner,

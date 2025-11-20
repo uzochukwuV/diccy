@@ -16,25 +16,8 @@ use linera_sdk::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-// Battle Token ABI for cross-application calls
-// Defined inline to avoid circular dependencies (battle-token is cdylib)
-pub struct BattleTokenAbi;
-
-impl ContractAbi for BattleTokenAbi {
-    type Operation = BattleTokenOperation;
-    type Response = ();
-}
-
-impl ServiceAbi for BattleTokenAbi {
-    type Query = async_graphql::Request;
-    type QueryResponse = async_graphql::Response;
-}
-
-/// Battle Token Operations
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum BattleTokenOperation {
-    Transfer { to: AccountOwner, amount: Amount },
-}
+// Import battle-token ABI and types for inter-contract calls
+use battle_token::{BattleTokenAbi, Operation as BattleTokenOperation, TokenResponse};
 
 /// Prediction Market Chain Application ABI
 pub struct PredictionAbi;
