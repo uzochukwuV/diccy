@@ -19,5 +19,9 @@ crate-type = ["cdylib", "rlib"]
 [dev-dependencies]
 
 [[bin]]
-name = "prediction-chain"
-path = "src/main.rs"
+name = "prediction_contract"
+path = "src/contract.rs"
+
+[[bin]]
+name = "prediction_service"
+path = "src/service.rs"

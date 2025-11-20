@@ -19,5 +19,9 @@ crate-type = ["cdylib", "rlib"]
 [dev-dependencies]
 
 [[bin]]
-name = "registry-chain"
-path = "src/main.rs"
+name = "registry_contract"
+path = "src/contract.rs"
+
+[[bin]]
+name = "registry_service"
+path = "src/service.rs"
