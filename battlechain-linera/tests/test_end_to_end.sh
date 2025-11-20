@@ -50,11 +50,17 @@ pkill -f "linera-server" || true
 pkill -f "linera service" || true
 sleep 2
 
-# Clean up existing wallet
-if [ -d "$WALLET_DIR" ]; then
-    echo "Removing existing test wallet..."
-    rm -rf "$WALLET_DIR"
-fi
+# Clean up existing wallet and all test directories
+echo "Removing existing test environment..."
+# Kill any processes on test ports (ignore errors if nothing is running)
+kill -9 $(sudo lsof -t -i:13001) 2>/dev/null || true
+kill -9 $(sudo lsof -t -i:10001) 2>/dev/null || true
+kill -9 $(sudo lsof -t -i:12001) 2>/dev/null || true
+
+# Remove all test directories unconditionally
+rm -rf "$WALLET_DIR"
+rm -rf /home/uzo/.config/linera
+rm -rf /home/uzo/.linera-battlechain-test
 mkdir -p "$WALLET_DIR"
 
 # Set wallet environment variables
@@ -74,6 +80,8 @@ echo "Starting local network with faucet on port $FAUCET_PORT..."
 linera net up --with-faucet --faucet-port $FAUCET_PORT > /dev/null 2>&1 &
 NETWORK_PID=$!
 
+
+
 # Wait for network to be ready
 echo "Waiting for network to be ready..."
 sleep 5
@@ -88,51 +96,71 @@ echo -e "${GREEN}✓ Local network started (PID: $NETWORK_PID)${NC}"
 echo ""
 
 # =============================================================================
-# STEP 3: INITIALIZE WALLET AND CREATE CHAINS
+# STEP 3: INITIALIZE WALLETS AND CREATE CHAINS
 # =============================================================================
-echo -e "${GREEN}=== STEP 3: Initialize Wallet and Create Chains ===${NC}"
+echo -e "${GREEN}=== STEP 3: Initialize Wallets and Create Chains ===${NC}"
 
 FAUCET_URL="http://localhost:$FAUCET_PORT"
 
-# Initialize wallet
-echo "Initializing wallet from faucet..."
+# Function to create a wallet and chain for a player
+create_player_wallet() {
+    local player_num=$1
+    local player_dir="$WALLET_DIR/player$player_num"
+
+    mkdir -p "$player_dir"
+
+    # Set environment variables for this player's wallet
+    export LINERA_WALLET="$player_dir/wallet.json"
+    export LINERA_KEYSTORE="$player_dir/keystore.json"
+    export LINERA_STORAGE="rocksdb:$player_dir/wallet.db"
+
+    # Initialize wallet and request chain
+    linera wallet init --faucet "$FAUCET_URL" > /dev/null 2>&1
+    local chain=$(linera wallet request-chain --faucet "$FAUCET_URL" 2>&1 | head -n1)
+
+    echo "$chain"
+}
+
+# Create default wallet for deployments
+echo "Creating default wallet for deployments..."
+export LINERA_WALLET="$WALLET_DIR/wallet.json"
+export LINERA_KEYSTORE="$WALLET_DIR/keystore.json"
+export LINERA_STORAGE="rocksdb:$WALLET_DIR/wallet.db"
+
 linera wallet init --faucet "$FAUCET_URL"
 if [ $? -ne 0 ]; then
-    echo -e "${RED}✗ Failed to initialize wallet${NC}"
+    echo -e "${RED}✗ Failed to initialize default wallet${NC}"
     exit 1
 fi
 
-# Request chains
-echo "Requesting chains from faucet..."
-
-# Function to request a chain
-request_chain() {
-    linera wallet request-chain --faucet "$FAUCET_URL" 2>&1 | head -n1
-}
-
-# Create default chain (for deployments)
-DEFAULT_CHAIN=$(request_chain)
+DEFAULT_CHAIN=$(linera wallet request-chain --faucet "$FAUCET_URL" 2>&1 | head -n1)
 echo "  Default Chain: $DEFAULT_CHAIN"
 
-# Create player chains
-PLAYER1_CHAIN=$(request_chain)
+# Create player wallets
+echo "Creating player wallets..."
+PLAYER1_CHAIN=$(create_player_wallet 1)
 echo "  Player 1 Chain: $PLAYER1_CHAIN"
 
-PLAYER2_CHAIN=$(request_chain)
+PLAYER2_CHAIN=$(create_player_wallet 2)
 echo "  Player 2 Chain: $PLAYER2_CHAIN"
 
-PLAYER3_CHAIN=$(request_chain)
+PLAYER3_CHAIN=$(create_player_wallet 3)
 echo "  Player 3 Chain: $PLAYER3_CHAIN"
 
-PLAYER4_CHAIN=$(request_chain)
+PLAYER4_CHAIN=$(create_player_wallet 4)
 echo "  Player 4 Chain: $PLAYER4_CHAIN"
 
-# Verify wallet setup
-linera sync
-BALANCE=$(linera query-balance)
-echo "  Chain balance: $BALANCE"
+# Reset to default wallet for subsequent operations
+export LINERA_WALLET="$WALLET_DIR/wallet.json"
+export LINERA_KEYSTORE="$WALLET_DIR/keystore.json"
+export LINERA_STORAGE="rocksdb:$WALLET_DIR/wallet.db"
 
-echo -e "${GREEN}✓ Wallet initialized with 5 chains${NC}"
+# Verify default wallet setup
+linera sync > /dev/null 2>&1
+BALANCE=$(linera query-balance --chain-id "$DEFAULT_CHAIN")
+echo "  Default chain balance: $BALANCE"
+
+echo -e "${GREEN}✓ Default wallet and 4 player wallets created${NC}"
 echo ""
 
 # =============================================================================
@@ -274,9 +302,46 @@ echo -e "${GREEN}✓ All contracts deployed successfully${NC}"
 echo ""
 
 # =============================================================================
-# STEP 6: START LINERA SERVICE
+# STEP 6: REGISTER APPLICATIONS ON PLAYER CHAINS
 # =============================================================================
-echo -e "${GREEN}=== STEP 6: Starting Linera Service ===${NC}"
+echo -e "${GREEN}=== STEP 6: Registering Applications on Player Chains ===${NC}"
+
+# Function to request application on a player chain
+request_app_on_player_chain() {
+    local player_num=$1
+    local app_id=$2
+    local player_dir="$WALLET_DIR/player$player_num"
+
+    # Switch to player wallet
+    export LINERA_WALLET="$player_dir/wallet.json"
+    export LINERA_KEYSTORE="$player_dir/keystore.json"
+    export LINERA_STORAGE="rocksdb:$player_dir/wallet.db"
+
+    # Request the application
+    linera request-application "$app_id" > /dev/null 2>&1
+}
+
+# Register all applications on each player chain
+for i in 1 2 3 4; do
+    echo "Registering applications on Player $i chain..."
+    request_app_on_player_chain $i "$BATTLE_TOKEN_APP_ID"
+    request_app_on_player_chain $i "$PLAYER_CHAIN_APP_ID"
+    request_app_on_player_chain $i "$MATCHMAKING_APP_ID"
+    echo "  ✓ Player $i applications registered"
+done
+
+# Reset to default wallet
+export LINERA_WALLET="$WALLET_DIR/wallet.json"
+export LINERA_KEYSTORE="$WALLET_DIR/keystore.json"
+export LINERA_STORAGE="rocksdb:$WALLET_DIR/wallet.db"
+
+echo -e "${GREEN}✓ All applications registered on player chains${NC}"
+echo ""
+
+# =============================================================================
+# STEP 7: START LINERA SERVICE
+# =============================================================================
+echo -e "${GREEN}=== STEP 7: Starting Linera Service ===${NC}"
 
 echo "Starting Linera service on port $SERVICE_PORT..."
 linera service --port $SERVICE_PORT > /dev/null 2>&1 &
@@ -295,9 +360,9 @@ echo ""
 GRAPHQL_URL="http://localhost:$SERVICE_PORT"
 
 # =============================================================================
-# STEP 7: TEST TOKEN DISTRIBUTION
+# STEP 8: TEST TOKEN DISTRIBUTION
 # =============================================================================
-echo -e "${GREEN}=== STEP 7: Token Distribution Test ===${NC}"
+echo -e "${GREEN}=== STEP 8: Token Distribution Test ===${NC}"
 
 # Transfer tokens to players
 for i in 1 2 3 4; do
@@ -326,9 +391,9 @@ echo -e "${GREEN}✓ Token distribution complete${NC}"
 echo ""
 
 # =============================================================================
-# STEP 8: TEST CHARACTER CREATION
+# STEP 9: TEST CHARACTER CREATION
 # =============================================================================
-echo -e "${GREEN}=== STEP 8: Character Creation Test ===${NC}"
+echo -e "${GREEN}=== STEP 9: Character Creation Test ===${NC}"
 
 # Create characters for players
 declare -A CHARACTERS
@@ -365,9 +430,9 @@ echo -e "${GREEN}✓ Character creation complete${NC}"
 echo ""
 
 # =============================================================================
-# STEP 9: TEST MATCHMAKING
+# STEP 10: TEST MATCHMAKING
 # =============================================================================
-echo -e "${GREEN}=== STEP 9: Matchmaking Test ===${NC}"
+echo -e "${GREEN}=== STEP 10: Matchmaking Test ===${NC}"
 
 # Player 1 joins queue
 echo "Player 1 (Warrior) joining matchmaking queue..."
@@ -415,9 +480,9 @@ echo -e "${GREEN}✓ Matchmaking test complete${NC}"
 echo ""
 
 # =============================================================================
-# STEP 10: QUERY APPLICATION STATUS
+# STEP 11: QUERY APPLICATION STATUS
 # =============================================================================
-echo -e "${GREEN}=== STEP 10: Querying Application Status ===${NC}"
+echo -e "${GREEN}=== STEP 11: Querying Application Status ===${NC}"
 
 echo "Querying Battle Token stats..."
 QUERY='query { stats { totalSupply totalHolders totalTransfers } }'
