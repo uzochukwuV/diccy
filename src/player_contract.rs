@@ -1,5 +1,5 @@
 use linera_sdk::{
-    linera_base_types::{Amount, AccountOwner},
+    linera_base_types::Amount,
     ContractRuntime,
 };
 
@@ -177,10 +177,28 @@ impl PlayerContract {
                 state.owner.set(Some(owner));
             }
 
-            Message::UpdatePlayerStats { player, won, xp_gained } => {
-                // Update player stats from battle results
+            Message::UpdatePlayerStats { player, won, xp_gained, elo_change, battle_chain } => {
+                // Verify message comes from lobby chain (only lobby can update player stats)
+                let sender_chain = runtime.message_origin_chain_id()
+                    .expect("Message must have origin");
+                let lobby_chain_id = state.lobby_chain_id.get().unwrap();
+                
+                if sender_chain != lobby_chain_id {
+                    return; // Reject unauthorized stat updates
+                }
+                
+                // Update player stats from battle results with ELO
                 if Some(player) == *state.owner.get() {
                     let mut stats = state.player_stats.get().clone();
+                    
+                    // Apply ELO change
+                    if elo_change >= 0 {
+                        stats.elo_rating = stats.elo_rating.saturating_add(elo_change as u64);
+                    } else {
+                        stats.elo_rating = stats.elo_rating.saturating_sub((-elo_change) as u64);
+                    }
+                    
+                    // Update battle count and win/loss
                     stats.total_battles += 1;
                     if won {
                         stats.wins += 1;
@@ -192,17 +210,47 @@ impl PlayerContract {
                         stats.losses += 1;
                         stats.current_streak = 0;
                     }
-                    stats.win_rate = stats.wins as f64 / stats.total_battles as f64;
+                    
+                    // Update win rate
+                    stats.win_rate = if stats.total_battles > 0 {
+                        stats.wins as f64 / stats.total_battles as f64
+                    } else {
+                        0.0
+                    };
+                    
                     state.player_stats.set(stats);
 
                     // Add XP to active character
                     if let Some(character_id) = state.active_character.get() {
                         if let Ok(Some(mut character)) = state.characters.get(character_id).await {
-                            character.xp += xp_gained as u64;
+                            character.xp += xp_gained;
                             state.characters.insert(character_id, character)
                                 .expect("Failed to update character XP");
                         }
                     }
+                    
+                    // Store battle record for history
+                    let battle_record = crate::state::BattleRecord {
+                        battle_chain,
+                        opponent: player, // This will be corrected by lobby
+                        character_used: state.active_character.get().clone().unwrap_or_default(),
+                        stake: Amount::ZERO, // Will be filled by lobby
+                        result: if won { crate::state::BattleResult::Won } else { crate::state::BattleResult::Lost },
+                        rounds_played: 0, // Will be filled by lobby
+                        xp_gained,
+                        payout: Amount::ZERO, // Will be filled by lobby
+                        combat_stats: crate::state::CombatStats {
+                            damage_dealt: 0,
+                            damage_taken: 0,
+                            crits: 0,
+                            dodges: 0,
+                            highest_crit: 0,
+                        },
+                        completed_at: runtime.system_time(),
+                    };
+                    
+                    state.battle_history.insert(&battle_chain, battle_record)
+                        .expect("Failed to store battle record");
                 }
             }
 

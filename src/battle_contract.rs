@@ -2,7 +2,7 @@ use crate::state::{BattleState, BattleStatus, BattleParticipant, CombatStats, St
 use crate::{Message, Operation};
 use crate::random::random_value;
 use linera_sdk::{
-    linera_base_types::{AccountOwner, Amount, ChainId, Timestamp},
+    linera_base_types::{AccountOwner, Amount, ChainId},
     ContractRuntime,
 };
 
@@ -444,6 +444,9 @@ async fn finalize_battle(
     let round_results = state.round_results.get().clone();
     let (winner_stats, loser_stats) = calculate_combat_stats(&round_results, &winner);
 
+    // Calculate ELO changes
+    let (winner_elo_change, loser_elo_change) = calculate_elo_changes(&p1, &p2, &winner);
+
     // Send results to lobby
     if let Some(lobby_chain) = state.lobby_chain_id.get().as_ref() {
         let convert_stats = |stats: &CombatStats| majorules::CombatStats {
@@ -456,16 +459,26 @@ async fn finalize_battle(
 
         let battle_chain = runtime.chain_id();
 
-        // Winner result
-        runtime.prepare_message(Message::BattleResult {
-            winner, loser, winner_payout, xp_gained: 150,
+        // Winner result with ELO update
+        runtime.prepare_message(Message::BattleResultWithElo {
+            player: winner,
+            opponent: loser,
+            won: true,
+            payout: winner_payout,
+            xp_gained: 150,
+            elo_change: winner_elo_change,
             battle_stats: convert_stats(&winner_stats),
             battle_chain,
         }).with_authentication().send_to(*lobby_chain);
 
-        // Loser result
-        runtime.prepare_message(Message::BattleResult {
-            winner, loser, winner_payout: Amount::ZERO, xp_gained: 50,
+        // Loser result with ELO update
+        runtime.prepare_message(Message::BattleResultWithElo {
+            player: loser,
+            opponent: winner,
+            won: false,
+            payout: Amount::ZERO,
+            xp_gained: 50,
+            elo_change: loser_elo_change,
             battle_stats: convert_stats(&loser_stats),
             battle_chain,
         }).with_authentication().send_to(*lobby_chain);
@@ -476,6 +489,37 @@ async fn finalize_battle(
             battle_stats: (convert_stats(&winner_stats), convert_stats(&loser_stats)),
         }).with_authentication().send_to(*lobby_chain);
     }
+}
+
+/// Calculate ELO rating changes using standard ELO formula
+fn calculate_elo_changes(
+    p1: &BattleParticipant,
+    p2: &BattleParticipant,
+    winner: &AccountOwner,
+) -> (i32, i32) {
+    // Use character levels as proxy for ELO (in real implementation, lobby would provide actual ELO)
+    let p1_elo = 1200 + (p1.character.level as i32 * 10);
+    let p2_elo = 1200 + (p2.character.level as i32 * 10);
+    
+    let k_factor = 32; // Standard K-factor for ELO
+    
+    // Calculate expected scores
+    let rating_diff = p2_elo - p1_elo;
+    let expected_p1 = 1.0 / (1.0 + 10.0_f64.powf(rating_diff as f64 / 400.0));
+    let expected_p2 = 1.0 - expected_p1;
+    
+    // Determine actual scores
+    let (actual_p1, actual_p2) = if winner == &p1.owner {
+        (1.0, 0.0)
+    } else {
+        (0.0, 1.0)
+    };
+    
+    // Calculate ELO changes
+    let p1_change = (k_factor as f64 * (actual_p1 - expected_p1)).round() as i32;
+    let p2_change = (k_factor as f64 * (actual_p2 - expected_p2)).round() as i32;
+    
+    (p1_change, p2_change)
 }
 
 fn calculate_combat_stats(round_results: &[RoundResult], winner: &AccountOwner) -> (CombatStats, CombatStats) {

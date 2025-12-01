@@ -182,7 +182,7 @@ pub struct RoundResult {
     pub player2_hp: u32,
 }
 
-/// Battle metadata for lobby tracking
+/// Battle metadata for lobby tracking (active battles only)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BattleMetadata {
     pub battle_chain: ChainId,
@@ -191,6 +191,22 @@ pub struct BattleMetadata {
     pub total_stake: Amount,
     pub created_at: Timestamp,
     pub status: BattleStatus,
+    pub has_prediction_market: bool,
+}
+
+/// Completed battle record for historical tracking
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompletedBattleRecord {
+    pub battle_chain: ChainId,
+    pub player1: AccountOwner,
+    pub player2: AccountOwner,
+    pub winner: AccountOwner,
+    pub total_stake: Amount,
+    pub rounds_played: u8,
+    pub created_at: Timestamp,
+    pub completed_at: Timestamp,
+    pub prediction_market_id: Option<u64>,
+    pub total_betting_volume: Amount,
 }
 
 /// Global player statistics
@@ -361,23 +377,39 @@ pub struct BettingLeaderboardEntry {
 #[derive(RootView)]
 #[view(context = ViewStorageContext)]
 pub struct LobbyState {
+    pub variant: RegisterView<String>,
     pub value: RegisterView<u64>,
+    
+    // === MATCHMAKING & BATTLE TRACKING ===
     pub waiting_players: MapView<AccountOwner, PlayerQueueEntry>,
     pub active_battles: MapView<ChainId, BattleMetadata>,
+    pub completed_battles: MapView<ChainId, CompletedBattleRecord>,
     pub battle_count: RegisterView<u64>,
-    pub player_stats: MapView<AccountOwner, PlayerGlobalStats>,
+    
+    // === PLAYER MANAGEMENT ===
     pub character_registry: MapView<String, CharacterRegistryEntry>,
     pub leaderboard: RegisterView<Vec<LeaderboardEntry>>,
+    
+    // === PLATFORM ECONOMICS ===
     pub platform_fee_bps: RegisterView<u16>,
     pub treasury_owner: RegisterView<Option<AccountOwner>>,
     pub total_platform_revenue: RegisterView<Amount>,
     pub battle_token_balance: RegisterView<Amount>,
+    
+    // === PREDICTION MARKETS (SEPARATE TRACKING) ===
+    pub prediction_markets: MapView<u64, Market>,
+    pub battle_to_market: MapView<ChainId, u64>,
+    pub market_count: RegisterView<u64>,
+    pub bets: MapView<(u64, AccountOwner), Bet>,
+    pub total_betting_volume: RegisterView<Amount>,
+    pub betting_leaderboard: RegisterView<Vec<BettingLeaderboardEntry>>,
 }
 
 /// Battle state - individual combat session between two players
 #[derive(RootView)]
 #[view(context = ViewStorageContext)]
 pub struct BattleState {
+    pub variant: RegisterView<String>,
     pub value: RegisterView<u64>,
     pub player1: RegisterView<Option<BattleParticipant>>,
     pub player2: RegisterView<Option<BattleParticipant>>,
@@ -424,6 +456,7 @@ pub struct CharacterData {
 #[derive(RootView)]
 #[view(context = ViewStorageContext)]
 pub struct PlayerState {
+    pub variant: RegisterView<String>,
     pub value: RegisterView<u64>,
     pub owner: RegisterView<Option<AccountOwner>>,
     pub lobby_chain_id: RegisterView<Option<ChainId>>,
@@ -443,6 +476,7 @@ pub struct PlayerState {
 #[derive(RootView)]
 #[view(context = ViewStorageContext)]
 pub struct PredictionState {
+    pub variant: RegisterView<String>,
     pub value: RegisterView<u64>,
     pub markets: MapView<u64, Market>,
     pub battle_to_market: MapView<ChainId, u64>,

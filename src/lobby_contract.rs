@@ -23,12 +23,25 @@ impl LobbyContract {
                 let caller = runtime.authenticated_signer()
                     .expect("Operation must be authenticated");
                 
-                // Create single-owner player chain for the user
+                // Create single-owner player chain with proper instantiation
                 let player_chain_id = runtime.open_chain(
                     linera_sdk::linera_base_types::ChainOwnership::single(caller),
                     linera_sdk::linera_base_types::ApplicationPermissions::default(),
                     Amount::ZERO,
                 );
+                
+                // Initialize as Player chain via instantiation argument
+                let init_arg = majorules::InitializationArgument {
+                    variant: majorules::ChainVariant::Player,
+                    treasury_owner: None,
+                    platform_fee_bps: None,
+                };
+                
+                runtime.prepare_message(majorules::Message::InstantiateChain {
+                    variant: init_arg.variant.clone(),
+                    treasury_owner: init_arg.treasury_owner,
+                    platform_fee_bps: init_arg.platform_fee_bps,
+                }).with_authentication().send_to(player_chain_id);
 
                 // Register player's chain ID
                 state.character_registry.insert(
@@ -77,6 +90,17 @@ impl LobbyContract {
                         .with_authentication()
                         .send_to(player_chain);
                 }
+            }
+            
+            Operation::PlaceBet { market_id, predicted_winner, amount } => {
+                let caller = runtime.authenticated_signer()
+                    .expect("Operation must be authenticated");
+                    
+                Self::place_bet(state, runtime, caller, market_id, predicted_winner, amount).await;
+            }
+            
+            Operation::CloseMarket { market_id } => {
+                Self::close_market(state, runtime, market_id).await;
             }
 
             _ => {
@@ -141,98 +165,48 @@ impl LobbyContract {
                 state.waiting_players.insert(&player, queue_entry)
                     .expect("Failed to add player to queue");
 
-                // Check for auto-match when 2 players in queue
+                // Check for ELO-based matchmaking
                 let queue_count = state.waiting_players.count().await.unwrap_or(0);
                 if queue_count >= 2 {
-                    // Get first two players from queue
-                    let mut players = Vec::new();
-                    {
-                        state.waiting_players.for_each_index_value(|owner, entry| {
-                            if players.len() < 2 {
-                                players.push((owner.clone(), entry.into_owned()));
-                            }
-                            Ok(())
-                        }).await.unwrap_or(());
-                    }
-
-                    if players.len() == 2 {
-                        let (player1_owner, player1_entry) = players[0].clone();
-                        let (player2_owner, player2_entry) = players[1].clone();
-
-                        // Remove both players from queue
-                        state.waiting_players.remove(&player1_owner).ok();
-                        state.waiting_players.remove(&player2_owner).ok();
-
-                        // Create multi-owner battle chain
-                        Self::create_battle_chain(state, runtime, player1_entry, player2_entry).await;
-                    }
+                    Self::attempt_elo_matchmaking(state, runtime).await;
                 }
             }
 
-            Message::BattleCompleted { winner, loser, rounds_played: _, total_stake, battle_stats: _ } => {
-                // Update platform revenue
-                let platform_fee_bps = state.platform_fee_bps.get();
-                let total_attos = u128::from(total_stake);
-                let fee_attos = total_attos.saturating_mul(*platform_fee_bps as u128) / 10000;
-                let platform_fee = Amount::from_attos(fee_attos);
+            Message::BattleResultWithElo { player, opponent: _, won, payout: _, xp_gained, elo_change, battle_stats: _, battle_chain } => {
+                // Verify message comes from a valid battle chain
+                let sender_chain = runtime.message_origin_chain_id()
+                    .expect("Message must have origin");
                 
-                let current_revenue = state.total_platform_revenue.get();
-                state.total_platform_revenue.set(current_revenue.saturating_add(platform_fee));
-
-                // Update player stats in their chains
-                if let Some(winner_chain) = Self::get_player_chain(&winner, state).await {
-                    runtime.prepare_message(Message::UpdatePlayerStats {
-                        player: winner,
-                        won: true,
-                        xp_gained: 100,
-                    }).with_authentication().send_to(winner_chain);
+                // Check if this battle chain exists in our active battles
+                if !state.active_battles.contains_key(&sender_chain).await.unwrap_or(false) {
+                    return; // Reject unauthorized battle results
                 }
-
-                if let Some(loser_chain) = Self::get_player_chain(&loser, state).await {
-                    runtime.prepare_message(Message::UpdatePlayerStats {
-                        player: loser,
-                        won: false,
-                        xp_gained: 25,
-                    }).with_authentication().send_to(loser_chain);
-                }
-            }
-
-            Message::BattleResult { winner, loser, winner_payout, xp_gained, battle_stats, battle_chain } => {
-                // Forward battle result to appropriate player chain
-                // Determine which player this result is for based on winner/loser and payout
-                let target_player = if winner_payout > Amount::ZERO { winner } else { loser };
                 
-                if let Some(player_chain) = Self::get_player_chain(&target_player, state).await {
-                    // Forward the battle result to the player's chain
-                    runtime.prepare_message(Message::BattleResult {
-                        winner,
-                        loser,
-                        winner_payout,
+                // Forward ELO update directly to player chain (lobby doesn't store stats)
+                if let Some(player_chain) = Self::get_player_chain(&player, state).await {
+                    runtime.prepare_message(Message::UpdatePlayerStats {
+                        player,
+                        won,
                         xp_gained,
-                        battle_stats,
+                        elo_change,
                         battle_chain,
                     }).with_authentication().send_to(player_chain);
                 }
             }
+            
+            Message::BattleCompleted { winner, loser, rounds_played, total_stake, battle_stats: _ } => {
+                let sender_chain = runtime.message_origin_chain_id()
+                    .expect("Message must have origin");
+                    
+                // Handle battle completion separately from prediction market
+                Self::handle_battle_completion(state, runtime, sender_chain, winner, loser, rounds_played, total_stake).await;
+            }
+
+
 
             Message::PlayerStatsResponse { player, stats } => {
-                // Update global leaderboard with player stats
-                state.player_stats.insert(&player, crate::state::PlayerGlobalStats {
-                    total_battles: stats.total_battles,
-                    wins: stats.wins,
-                    losses: stats.losses,
-                    win_rate: stats.win_rate,
-                    elo_rating: stats.elo_rating,
-                    total_earnings: stats.total_earnings,
-                    total_damage_dealt: stats.total_damage_dealt,
-                    total_damage_taken: stats.total_damage_taken,
-                    total_crits: stats.total_crits,
-                    total_dodges: stats.total_dodges,
-                    best_streak: stats.best_streak,
-                    current_streak: stats.current_streak,
-                    highest_crit: stats.highest_crit,
-                })
-                    .expect("Failed to update player stats");
+                // Use player stats for matchmaking (don't store permanently)
+                // This is used temporarily for ELO-based matchmaking
             }
 
             _ => {
@@ -257,7 +231,7 @@ impl LobbyContract {
     ) {
         use linera_sdk::linera_base_types::{ChainOwnership, ApplicationPermissions};
 
-        // Create multi-owner battle chain
+        // Create multi-owner battle chain with proper instantiation
         let battle_chain_id = runtime.open_chain(
             ChainOwnership::multiple(
                 vec![
@@ -270,6 +244,19 @@ impl LobbyContract {
             ApplicationPermissions::default(),
             Amount::ZERO,
         );
+        
+        // Initialize as Battle chain via instantiation argument
+        let init_arg = majorules::InitializationArgument {
+            variant: majorules::ChainVariant::Battle,
+            treasury_owner: Some(state.treasury_owner.get().unwrap()),
+            platform_fee_bps: Some(*state.platform_fee_bps.get()),
+        };
+        
+        runtime.prepare_message(majorules::Message::InstantiateChain {
+            variant: init_arg.variant.clone(),
+            treasury_owner: init_arg.treasury_owner,
+            platform_fee_bps: init_arg.platform_fee_bps,
+        }).with_authentication().send_to(battle_chain_id);
 
         // Send initialization message to battle chain
         let participant1 = majorules::BattleParticipant::new(
@@ -342,9 +329,267 @@ impl LobbyContract {
             total_stake: player1.stake.saturating_add(player2.stake),
             created_at: runtime.system_time(),
             status: crate::state::BattleStatus::InProgress,
+            has_prediction_market: true,
         };
 
         state.active_battles.insert(&battle_chain_id, battle_metadata)
             .expect("Failed to track battle");
+            
+        // Create prediction market separately
+        let market_id = Self::create_prediction_market_in_lobby(state, runtime, battle_chain_id, player1.player_chain, player2.player_chain).await;
+        
+        // Link battle to market for tracking
+        state.battle_to_market.insert(&battle_chain_id, market_id)
+            .expect("Failed to link battle to market");
+    }
+    
+    /// Attempt ELO-based matchmaking by requesting player stats
+    async fn attempt_elo_matchmaking(
+        state: &mut LobbyState,
+        runtime: &mut ContractRuntime<crate::MajorulesContract>,
+    ) {
+        // For now, use simple level-based matching from character snapshots
+        // In full implementation, would request ELO from player chains first
+        let mut players_with_level = Vec::new();
+        
+        state.waiting_players.for_each_index_value(|owner, entry| {
+            let level = entry.character_snapshot.level;
+            players_with_level.push((owner.clone(), entry.into_owned(), level));
+            Ok(())
+        }).await.unwrap_or(());
+        
+        // Sort by character level as ELO proxy
+        players_with_level.sort_by_key(|(_, _, level)| *level);
+        
+        // Find best match pairs (closest levels)
+        for i in 0..players_with_level.len() {
+            for j in (i + 1)..players_with_level.len() {
+                let (_, _, level1) = &players_with_level[i];
+                let (_, _, level2) = &players_with_level[j];
+                
+                // Match players within 10 levels for fair games
+                let level_diff = if level1 > level2 { level1 - level2 } else { level2 - level1 };
+                
+                if level_diff <= 10 {
+                    let (player1_owner, player1_entry, _) = players_with_level[i].clone();
+                    let (player2_owner, player2_entry, _) = players_with_level[j].clone();
+                    
+                    // Remove both players from queue
+                    state.waiting_players.remove(&player1_owner).ok();
+                    state.waiting_players.remove(&player2_owner).ok();
+                    
+                    // Create battle
+                    Self::create_battle_chain(state, runtime, player1_entry, player2_entry).await;
+                    return; // Match found, exit
+                }
+            }
+        }
+        
+        // If no close level match found and queue has been waiting too long, match anyway
+        if players_with_level.len() >= 2 {
+            let now = runtime.system_time();
+            let oldest_wait = players_with_level.iter()
+                .map(|(_, entry, _)| now.delta_since(entry.joined_at).as_micros() / 1_000_000)
+                .max()
+                .unwrap_or(0);
+            
+            // After 60 seconds, match regardless of level difference
+            if oldest_wait >= 60 {
+                let (player1_owner, player1_entry, _) = players_with_level[0].clone();
+                let (player2_owner, player2_entry, _) = players_with_level[1].clone();
+                
+                state.waiting_players.remove(&player1_owner).ok();
+                state.waiting_players.remove(&player2_owner).ok();
+                
+                Self::create_battle_chain(state, runtime, player1_entry, player2_entry).await;
+            }
+        }
+    }
+    
+    /// Create prediction market in lobby for battle
+    async fn create_prediction_market_in_lobby(
+        state: &mut LobbyState,
+        runtime: &mut ContractRuntime<crate::MajorulesContract>,
+        battle_chain: ChainId,
+        player1_chain: ChainId,
+        player2_chain: ChainId,
+    ) -> u64 {
+        // Generate unique market ID
+        let current_market_count = state.market_count.get();
+        let market_id = current_market_count + 1;
+        state.market_count.set(market_id);
+        
+        // Create market with separate lifecycle from battle
+        let market = crate::state::Market {
+            market_id,
+            battle_chain,
+            player1_chain,
+            player2_chain,
+            status: crate::state::MarketStatus::Open,
+            total_pool: Amount::ZERO,
+            player1_pool: Amount::ZERO,
+            player2_pool: Amount::ZERO,
+            winner_chain: None,
+            created_at: runtime.system_time(),
+            closed_at: None,
+            settled_at: None,
+        };
+        
+        // Store market separately from battle tracking
+        state.prediction_markets.insert(&market_id, market)
+            .expect("Failed to create prediction market");
+            
+        market_id
+    }
+    
+    /// Place bet on battle outcome
+    async fn place_bet(
+        state: &mut LobbyState,
+        runtime: &mut ContractRuntime<crate::MajorulesContract>,
+        bettor: AccountOwner,
+        market_id: u64,
+        predicted_winner: ChainId,
+        amount: Amount,
+    ) {
+        // Get market and validate
+        if let Ok(Some(mut market)) = state.prediction_markets.get(&market_id).await {
+            if market.status != crate::state::MarketStatus::Open {
+                return; // Market closed
+            }
+            
+            // Create bet
+            let bet = crate::state::Bet {
+                bettor,
+                market_id,
+                predicted_winner,
+                amount,
+                odds_at_bet: 10000, // 1:1 odds for simplicity
+                placed_at: runtime.system_time(),
+                claimed: false,
+            };
+            
+            // Update market pools
+            market.total_pool = market.total_pool.saturating_add(amount);
+            if predicted_winner == market.player1_chain {
+                market.player1_pool = market.player1_pool.saturating_add(amount);
+            } else {
+                market.player2_pool = market.player2_pool.saturating_add(amount);
+            }
+            
+            // Store bet and update market
+            state.bets.insert(&(market_id, bettor), bet)
+                .expect("Failed to place bet");
+            state.prediction_markets.insert(&market_id, market)
+                .expect("Failed to update market");
+                
+            // Update total volume
+            let current_volume = state.total_betting_volume.get();
+            state.total_betting_volume.set(current_volume.saturating_add(amount));
+        }
+    }
+    
+    /// Handle battle completion with separate tracking
+    async fn handle_battle_completion(
+        state: &mut LobbyState,
+        runtime: &mut ContractRuntime<crate::MajorulesContract>,
+        battle_chain: ChainId,
+        winner: AccountOwner,
+        _loser: AccountOwner,
+        rounds_played: u8,
+        total_stake: Amount,
+    ) {
+        // Get battle metadata before removing
+        if let Ok(Some(battle_metadata)) = state.active_battles.get(&battle_chain).await {
+            // Update platform revenue
+            let platform_fee_bps = state.platform_fee_bps.get();
+            let total_attos = u128::from(total_stake);
+            let fee_attos = total_attos.saturating_mul(*platform_fee_bps as u128) / 10000;
+            let platform_fee = Amount::from_attos(fee_attos);
+            
+            let current_revenue = state.total_platform_revenue.get();
+            state.total_platform_revenue.set(current_revenue.saturating_add(platform_fee));
+            
+            // Get prediction market info if exists
+            let (market_id, betting_volume) = if let Ok(Some(market_id)) = state.battle_to_market.get(&battle_chain).await {
+                let volume = if let Ok(Some(market)) = state.prediction_markets.get(&market_id).await {
+                    market.total_pool
+                } else {
+                    Amount::ZERO
+                };
+                (Some(market_id), volume)
+            } else {
+                (None, Amount::ZERO)
+            };
+            
+            // Create completed battle record
+            let completed_record = crate::state::CompletedBattleRecord {
+                battle_chain,
+                player1: battle_metadata.player1,
+                player2: battle_metadata.player2,
+                winner,
+                total_stake,
+                rounds_played,
+                created_at: battle_metadata.created_at,
+                completed_at: runtime.system_time(),
+                prediction_market_id: market_id,
+                total_betting_volume: betting_volume,
+            };
+            
+            // Move from active to completed
+            state.completed_battles.insert(&battle_chain, completed_record)
+                .expect("Failed to record completed battle");
+            state.active_battles.remove(&battle_chain).ok();
+            
+            // Handle prediction market settlement separately
+            if let Some(market_id) = market_id {
+                Self::settle_prediction_market(state, runtime, market_id, winner).await;
+            }
+        }
+    }
+    
+    /// Settle prediction market separately from battle
+    async fn settle_prediction_market(
+        state: &mut LobbyState,
+        runtime: &mut ContractRuntime<crate::MajorulesContract>,
+        market_id: u64,
+        winner: AccountOwner,
+    ) {
+        if let Ok(Some(mut market)) = state.prediction_markets.get(&market_id).await {
+            // Determine winner chain from battle result
+            // Find winner chain by comparing with battle participants
+            let winner_chain = if let Ok(Some(battle)) = state.active_battles.get(&market.battle_chain).await {
+                if winner == battle.player1 {
+                    market.player1_chain
+                } else {
+                    market.player2_chain
+                }
+            } else {
+                market.player1_chain // fallback
+            };
+            
+            market.status = crate::state::MarketStatus::Settled;
+            market.winner_chain = Some(winner_chain);
+            market.settled_at = Some(runtime.system_time());
+            
+            state.prediction_markets.insert(&market_id, market)
+                .expect("Failed to settle market");
+                
+            // TODO: Distribute winnings to bettors
+        }
+    }
+    
+    /// Close market when battle starts
+    async fn close_market(
+        state: &mut LobbyState,
+        runtime: &mut ContractRuntime<crate::MajorulesContract>,
+        market_id: u64,
+    ) {
+        if let Ok(Some(mut market)) = state.prediction_markets.get(&market_id).await {
+            market.status = crate::state::MarketStatus::Closed;
+            market.closed_at = Some(runtime.system_time());
+            
+            state.prediction_markets.insert(&market_id, market)
+                .expect("Failed to close market");
+        }
     }
 }

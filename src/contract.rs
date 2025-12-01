@@ -33,6 +33,27 @@ impl WithContractAbi for MajorulesContract {
     type Abi = majorules::MajorulesAbi;
 }
 
+impl MajorulesContract {
+    /// Detect chain variant from stored state
+    async fn detect_chain_variant(runtime: &ContractRuntime<Self>) -> ChainVariant {
+        // Try to load each state type and check variant field
+        if let Ok(lobby_state) = LobbyState::load(runtime.root_view_storage_context()).await {
+            let variant_str = lobby_state.variant.get();
+            if !variant_str.is_empty() {
+                match variant_str.as_str() {
+                    "Lobby" => return ChainVariant::Lobby,
+                    "Player" => return ChainVariant::Player,
+                    "Battle" => return ChainVariant::Battle,
+                    _ => {}
+                }
+            }
+        }
+        
+        // Default to Lobby for uninitialized chains
+        ChainVariant::Lobby
+    }
+}
+
 impl Contract for MajorulesContract {
     type Message = Message;
     type Parameters = ();
@@ -40,9 +61,10 @@ impl Contract for MajorulesContract {
     type EventValue = ();
 
     async fn load(runtime: ContractRuntime<Self>) -> Self {
-        // Default to Lobby variant for now
-        let variant = ChainVariant::Lobby;
+        // Try to detect chain variant from stored state
+        let variant = Self::detect_chain_variant(&runtime).await;
 
+        // Load appropriate state, defaulting to empty state for new chains
         match variant {
             ChainVariant::Lobby => {
                 let lobby_state = LobbyState::load(runtime.root_view_storage_context()).await.expect("Failed to load lobby state");
@@ -56,10 +78,10 @@ impl Contract for MajorulesContract {
                 let battle_state = BattleState::load(runtime.root_view_storage_context()).await.expect("Failed to load battle state");
                 Self { variant, lobby_state: None, player_state: None, battle_state: Some(battle_state), runtime }
             }
-            _ => {
-                // For now, default other variants to lobby
+            ChainVariant::Prediction => {
+                // Prediction markets are handled by lobby, redirect to lobby
                 let lobby_state = LobbyState::load(runtime.root_view_storage_context()).await.expect("Failed to load lobby state");
-                Self { variant, lobby_state: Some(lobby_state), player_state: None, battle_state: None, runtime }
+                Self { variant: ChainVariant::Lobby, lobby_state: Some(lobby_state), player_state: None, battle_state: None, runtime }
             }
         }
     }
@@ -72,17 +94,21 @@ impl Contract for MajorulesContract {
         match argument.variant {
             ChainVariant::Lobby => {
                 if let Some(ref mut state) = self.lobby_state {
+                    state.variant.set("Lobby".to_string());
                     state.value.set(0);
                     state.treasury_owner.set(argument.treasury_owner);
                     state.platform_fee_bps.set(argument.platform_fee_bps.unwrap_or(500));
                     state.battle_count.set(0);
                     state.total_platform_revenue.set(Amount::ZERO);
                     state.battle_token_balance.set(Amount::ZERO);
+                    state.market_count.set(0);
+                    state.total_betting_volume.set(Amount::ZERO);
+                    state.betting_leaderboard.set(Vec::new());
                 }
             }
             ChainVariant::Player => {
                 if let Some(ref mut state) = self.player_state {
-                    // Player state initialized by InitializePlayerChain message
+                    state.variant.set("Player".to_string());
                     state.value.set(0);
                     state.character_count.set(0);
                     state.battle_token_balance.set(Amount::ZERO);
@@ -94,7 +120,7 @@ impl Contract for MajorulesContract {
             }
             ChainVariant::Battle => {
                 if let Some(ref mut state) = self.battle_state {
-                    // Battle state initialized by InitializeBattle message
+                    state.variant.set("Battle".to_string());
                     state.value.set(0);
                     state.status.set(crate::state::BattleStatus::WaitingForPlayers);
                     state.current_round.set(0);
@@ -109,8 +135,8 @@ impl Contract for MajorulesContract {
                     state.completed_at.set(None);
                 }
             }
-            _ => {
-                // Other variants not implemented yet
+            ChainVariant::Prediction => {
+                // Prediction markets handled by lobby, treat as lobby
             }
         }
     }
@@ -132,11 +158,24 @@ impl Contract for MajorulesContract {
                     battle_contract::handle_battle_operation(operation, state, &mut self.runtime).await;
                 }
             }
-            _ => (), // Other variants not implemented
+            ChainVariant::Prediction => {
+                // Prediction operations handled by lobby
+            }
         }
     }
 
     async fn execute_message(&mut self, message: Self::Message) {
+        // Handle InstantiateChain message first
+        if let Message::InstantiateChain { variant, treasury_owner, platform_fee_bps } = message {
+            let init_arg = InitializationArgument {
+                variant,
+                treasury_owner,
+                platform_fee_bps,
+            };
+            self.instantiate(init_arg).await;
+            return;
+        }
+        
         match self.variant {
             ChainVariant::Lobby => {
                 if let Some(ref mut state) = self.lobby_state {
@@ -153,11 +192,13 @@ impl Contract for MajorulesContract {
                     battle_contract::handle_battle_message(message, state, &mut self.runtime).await;
                 }
             }
-            _ => (), // Other variants not implemented
+            ChainVariant::Prediction => {
+                // Prediction messages handled by lobby
+            }
         }
     }
 
-    async fn store(mut self) {
+    async fn store(self) {
         if let Some(mut state) = self.lobby_state {
             state.save().await.expect("Failed to save lobby state");
         }
@@ -167,5 +208,6 @@ impl Contract for MajorulesContract {
         if let Some(mut state) = self.battle_state {
             state.save().await.expect("Failed to save battle state");
         }
+
     }
 }

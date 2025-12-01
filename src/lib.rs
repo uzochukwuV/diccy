@@ -285,6 +285,18 @@ pub enum Message {
         battle_stats: (CombatStats, CombatStats), // (winner_stats, loser_stats)
     },
     
+    /// Battle result with ELO changes for lobby processing
+    BattleResultWithElo {
+        player: AccountOwner,
+        opponent: AccountOwner,
+        won: bool,
+        payout: Amount,
+        xp_gained: u64,
+        elo_change: i32,
+        battle_stats: CombatStats,
+        battle_chain: ChainId,
+    },
+    
     // ===== PLAYER → LOBBY =====
     /// Request to join matchmaking queue
     RequestJoinQueue {
@@ -345,11 +357,13 @@ pub enum Message {
         player: AccountOwner,
     },
     
-    /// Update player stats after battle
+    /// Update player stats after battle with ELO
     UpdatePlayerStats {
         player: AccountOwner,
         won: bool,
         xp_gained: u64,
+        elo_change: i32,
+        battle_chain: ChainId,
     },
     
     // ===== PLAYER → LOBBY =====
@@ -369,6 +383,13 @@ pub enum Message {
     InitializePlayerChain {
         lobby_chain_id: ChainId,
         owner: AccountOwner,
+    },
+    
+    /// Instantiate chain with specific variant
+    InstantiateChain {
+        variant: ChainVariant,
+        treasury_owner: Option<AccountOwner>,
+        platform_fee_bps: Option<u16>,
     },
 }
 
